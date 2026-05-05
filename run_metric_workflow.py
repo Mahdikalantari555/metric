@@ -179,8 +179,7 @@ class METRICWorkflow:
         self.scenes_dir.mkdir(parents=True, exist_ok=True)
         self.et_output_dir = self.output_dir / "et_output"
         self.et_output_dir.mkdir(parents=True, exist_ok=True)
-        self.interpolated_dir = self.output_dir / "interpolated"
-        self.interpolated_dir.mkdir(parents=True, exist_ok=True)
+        # Note: No longer creating interpolated_dir - interpolated files go directly to ETaDaily folder
         
         logger.info(f"Initialized METRIC workflow")
         logger.info(f"ROI: {self.roi_path}")
@@ -236,7 +235,9 @@ class METRICWorkflow:
                 logger.error("No scenes processed successfully. Workflow aborted.")
                 return results
             
-            # Step 3: Interpolate and extrapolate ET
+            # Step 3: Interpolate and extrapolate ET FIRST
+            # We must interpolate BEFORE organizing products because we need
+            # to find ETrF files in the result_* directories first
             logger.info("=" * 60)
             logger.info("STEP 3: Interpolating and extrapolating ET")
             logger.info("=" * 60)
@@ -247,7 +248,7 @@ class METRICWorkflow:
             if extrap_result:
                 results['extrapolation_dates'] = len(extrap_result.get('dates', []))
             
-            # Step 4: Organize products and create metadata
+            # Step 4: Organize ALL products (scene + interpolated)
             logger.info("=" * 60)
             logger.info("STEP 4: Organizing products and creating metadata")
             logger.info("=" * 60)
@@ -493,14 +494,25 @@ class METRICWorkflow:
             import numpy as np
             from pathlib import Path
             
-            # Initialize extrapolator
+            # Get CRS from first scene's ETrF file for coordinate transformation
+            first_scene = processed_scenes[0]
+            first_output_dir = Path(first_scene['et_output_dir'])
+            etrf_files = list(first_output_dir.glob("ETrF_*.tif"))
+            
+            source_crs = None
+            if etrf_files:
+                with rasterio.open(etrf_files[0]) as src:
+                    source_crs = str(src.crs)
+            
+            # Initialize extrapolator with CRS info
             extrapolator = create_extrapolator({
                 "extrapolation_days": self.extrapolation_days,
                 "interpolation_method": self.interpolation_method,
                 "min_et_daily": 0.0,
                 "max_et_daily": 15.0,
                 "etrf_min": 0.0,
-                "etrf_max": 1.5
+                "etrf_max": 1.5,
+                "source_crs": source_crs
             })
             
             # Load ETrF scenes for interpolation
@@ -631,7 +643,8 @@ class METRICWorkflow:
     
     def _save_interpolated_results(self, result: Dict, prefix: str) -> None:
         """
-        Save interpolated or extrapolated results to GeoTIFF files.
+        Save interpolated or extrapolated results to ETaDaily product folder.
+        Files are saved with _interpolated or _extrapolated suffix.
         
         Args:
             result: Interpolation/extrapolation result dictionary
@@ -660,6 +673,10 @@ class METRICWorkflow:
             height = src.height
             width = src.width
         
+        # Save directly to ETaDaily product folder
+        eta_daily_product_dir = self.et_output_dir / "products" / "ETaDaily"
+        eta_daily_product_dir.mkdir(parents=True, exist_ok=True)
+        
         # Save each date's result
         for i, date in enumerate(dates):
             if i >= len(eta_daily):
@@ -670,7 +687,8 @@ class METRICWorkflow:
             
             date_str = date.strftime('%Y%m%d') if hasattr(date, 'strftime') else str(date).replace('-', '')
             
-            output_file = self.interpolated_dir / f"ETa_{prefix}_{date_str}_{self.aoi_name}.tif"
+            # Save in ETaDaily folder with _interpolated or _extrapolated suffix
+            output_file = eta_daily_product_dir / f"ETaDaily_interpolated_{date_str}_{self.aoi_name}.tif"
             
             with rasterio.open(
                 output_file,
@@ -692,6 +710,7 @@ class METRICWorkflow:
     def _organize_products(self) -> Dict:
         """
         Organize all products and create metadata.
+        Metadata is saved in each product's folder.
         
         Returns:
             Dictionary mapping product types to lists of organized file paths
@@ -699,23 +718,12 @@ class METRICWorkflow:
         logger.info("Organizing products and creating metadata")
         
         try:
-            # Organize ET output products
+            # Organize ET output products (metadata_in_product_folder=True)
             organized = organize_products(
                 output_dir=str(self.et_output_dir),
                 aoi_name=self.aoi_name,
                 create_metadata=True
             )
-            
-            # Also organize interpolated products (ONLY ETaDaily should be interpolated)
-            if self.interpolated_dir.exists():
-                interp_organized = self._organize_interpolated_products()
-                
-                # Merge results
-                for k, v in interp_organized.items():
-                    if k in organized:
-                        organized[k].extend(v)
-                    else:
-                        organized[k] = v
             
             logger.info(f"Organized {sum(len(v) for v in organized.values())} products")
             return organized

@@ -94,10 +94,11 @@ class VegetationIndices:
             ndwi = self.compute_ndwi(cube)
             cube.add("ndwi", ndwi)
         
-        # Compute MNDWI if green and swir16 bands are available
-        if "green" in cube.bands() and "swir16" in cube.bands():
-            mndwi = self.compute_mndwi(cube)
-            cube.add("mndwi", mndwi)
+        # NOTE: MNDWI has been removed as per requirements
+        # If needed in future, uncomment the following:
+        # if "green" in cube.bands() and "swir16" in cube.bands():
+        #     mndwi = self.compute_mndwi(cube)
+        #     cube.add("mndwi", mndwi)
         
         return cube
     

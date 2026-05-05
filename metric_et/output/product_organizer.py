@@ -5,13 +5,16 @@ a structured directory hierarchy with metadata.
 
 The expected output structure is:
     /products/
-        /NDVI/
-            NDVI_LC08_20200105_amirkabir.tif
+        /ETaDaily/
+            ETaDaily_LC08_20200105_amirkabir.tif
+            ETaDaily_LC08_20200105_amirkabir_metadata.json
             ...
         /ETrF/
             ETrF_LC08_20200105_amirkabir.tif
+            ETrF_LC08_20200105_amirkabir_metadata.json
             ...
-        /metadata/
+        /NDVI/
+            NDVI_LC08_20200105_amirkabir.tif
             NDVI_LC08_20200105_amirkabir_metadata.json
             ...
 """
@@ -29,7 +32,7 @@ from loguru import logger
 
 class ProductOrganizer:
     """
-    Organize METRIC output products into structured directories.
+    Organize METRIC ETa products into structured directories.
     
     This class handles:
     - Scanning output directories for products
@@ -39,34 +42,36 @@ class ProductOrganizer:
     """
     
     # Product type patterns for identification
+    # Key: product folder name, Value: regex pattern to match filename
     PRODUCT_PATTERNS = {
-        'ETaDaily': r'ETaDaily.*\.tif$',
-        'ETinst': r'ETinst.*\.tif$',
-        'ETrF': r'ETrF.*\.tif$',
-        'LE': r'LE.*\.tif$',
-        'ETqualityClass': r'ETqualityClass.*\.tif$',
-        'ETaClassified': r'ETaClassified.*\.tif$',
-        'CWSI': r'CWSI.*\.tif$',
-        'Rn': r'Rn.*\.tif$',
-        'G': r'G.*\.tif$',
-        'H': r'H.*\.tif$',
-        'NDVI': r'NDVI.*\.tif$',
-        'EVI': r'EVI.*\.tif$',
-        'NDWI': r'NDWI.*\.tif$',
-        'MNDWI': r'MNDWI.*\.tif$',
-        'LAI': r'LAI.*\.tif$',
-        'SAVI': r'SAVI.*\.tif$',
-        'FVC': r'FVC.*\.tif$',
-        'LST': r'LST.*\.tif$',
-        'Albedo': r'Albedo.*\.tif$',
-        'RGB': r'RGB.*\.tif$',
+        'ETaDaily': r'^(ETaDaily|ETa)_.+_\d{8}_',  # Matches ETaDaily_*.tif, ETaDaily_interpolated_*.tif
+        'ETinst': r'^ETinst_',
+        'ETrF': r'^ETrF_',
+        'LE': r'^LE_',
+        'ETqualityClass': r'^ETqualityClass_',
+        'ETaClassified': r'^ETaClassified_',
+        'CWSI': r'^CWSI_',
+        'Rn': r'^Rn_',
+        'G': r'^G_',
+        'H': r'^H_',
+        'NDVI': r'^NDVI_',
+        'EVI': r'^EVI_',
+        'LAI': r'^LAI_',
+        'SAVI': r'^SAVI_',
+        'FVC': r'^FVC_',
+        'LST': r'^LST_',
+        'Albedo': r'^Albedo_',
+        'RGB': r'^RGB_',
+        'AirTemp': r'^AirTemp_',
+        'NDWI': r'^NDWI_',
     }
     
     def __init__(
         self,
         output_dir: str,
         aoi_name: str = "AOI",
-        create_metadata: bool = True
+        create_metadata: bool = True,
+        metadata_in_product_folder: bool = True
     ):
         """
         Initialize ProductOrganizer.
@@ -75,13 +80,16 @@ class ProductOrganizer:
             output_dir: Base output directory containing products
             aoi_name: Area of Interest name for file naming
             create_metadata: Whether to create metadata JSON files
+            metadata_in_product_folder: If True, save metadata in each product's folder.
+                                                If False, save in a central metadata folder.
         """
         self.output_dir = Path(output_dir)
         self.aoi_name = aoi_name
         self.create_metadata = create_metadata
+        self.metadata_in_product_folder = metadata_in_product_folder
         self.products_dir = self.output_dir / "products"
-        self.metadata_dir = self.products_dir / "metadata"
-        
+        self.metadata_dir = self.products_dir / "metadata" if not metadata_in_product_folder else None
+    
     def organize(self) -> Dict[str, List[str]]:
         """
         Organize all products in the output directory.
@@ -99,6 +107,12 @@ class ProductOrganizer:
         
         if not products:
             logger.warning(f"No products found in {self.output_dir}")
+            logger.warning("DEBUG: Check if .tif files exist in subdirectories")
+            # Debug: list all tif files found
+            all_tifs = list(self.output_dir.rglob("*.tif"))
+            logger.warning(f"DEBUG: Total .tif files found in output_dir: {len(all_tifs)}")
+            for tif in all_tifs[:10]:  # Show first 10
+                logger.warning(f"  - {tif}")
             return {}
         
         logger.info(f"Found {sum(len(v) for v in products.values())} products to organize")
@@ -113,6 +127,10 @@ class ProductOrganizer:
             self._create_summary_metadata(organized)
         
         logger.info(f"Product organization complete. Products saved to {self.products_dir}")
+        logger.info(f"Organized products: {list(organized.keys())}")
+        for pt, files in organized.items():
+            logger.info(f"  {pt}: {len(files)} files")
+        
         return organized
     
     def _create_directory_structure(self) -> None:
@@ -120,8 +138,8 @@ class ProductOrganizer:
         # Create main products directory
         self.products_dir.mkdir(parents=True, exist_ok=True)
         
-        # Create metadata directory
-        if self.create_metadata:
+        # Create metadata directory (only if not using per-product folders)
+        if self.create_metadata and not self.metadata_in_product_folder:
             self.metadata_dir.mkdir(parents=True, exist_ok=True)
         
         # Create subdirectories for each product type
@@ -130,6 +148,7 @@ class ProductOrganizer:
             product_dir.mkdir(parents=True, exist_ok=True)
         
         logger.info(f"Created directory structure in {self.products_dir}")
+        logger.info(f"Product folders created: {list(self.PRODUCT_PATTERNS.keys())}")
     
     def _scan_products(self) -> Dict[str, List[Path]]:
         """
@@ -140,10 +159,18 @@ class ProductOrganizer:
         """
         products = {}
         
+        # Debug: Count all tif files first
+        all_tif_files = list(self.output_dir.rglob("*.tif"))
+        logger.debug(f"Total .tif files found: {len(all_tif_files)}")
+        
         # Scan all .tif files in output directory and subdirectories
         for tif_file in self.output_dir.rglob("*.tif"):
             # Skip files already in products directory
             if "products" in tif_file.parts:
+                continue
+            
+            # Skip PNG and JSON files
+            if tif_file.suffix.lower() != '.tif':
                 continue
             
             # Identify product type
@@ -153,6 +180,17 @@ class ProductOrganizer:
                 if product_type not in products:
                     products[product_type] = []
                 products[product_type].append(tif_file)
+                logger.debug(f"Found {product_type}: {tif_file.name}")
+            else:
+                logger.debug(f"Unrecognized product file: {tif_file.name}")
+        
+        # Summary log
+        if products:
+            logger.info(f"Scan complete: Found products in {len(products)} categories")
+            for pt, files in products.items():
+                logger.info(f"  {pt}: {len(files)} files")
+        else:
+            logger.warning("No recognizable products found during scan")
         
         return products
     
@@ -167,7 +205,7 @@ class ProductOrganizer:
             Product type string or None if not recognized
         """
         for product_type, pattern in self.PRODUCT_PATTERNS.items():
-            if re.search(pattern, filename):
+            if re.match(pattern, filename, re.IGNORECASE):
                 return product_type
         return None
     
@@ -185,17 +223,28 @@ class ProductOrganizer:
         organized_files = []
         product_dir = self.products_dir / product_type
         
+        # Ensure product directory exists
+        product_dir.mkdir(parents=True, exist_ok=True)
+        
         for src_file in files:
             try:
-                # Generate new filename following naming convention
-                new_filename = self._generate_product_filename(src_file.name, product_type)
-                dst_file = product_dir / new_filename
+                # Skip if file doesn't exist (might have been moved already)
+                if not src_file.exists():
+                    logger.warning(f"File already moved or doesn't exist: {src_file}")
+                    continue
+                
+                dst_file = product_dir / src_file.name
+                
+                # Handle case where destination already exists
+                if dst_file.exists():
+                    logger.warning(f"Destination already exists, skipping: {dst_file.name}")
+                    continue
                 
                 # Move file to product directory
                 shutil.move(str(src_file), str(dst_file))
                 organized_files.append(str(dst_file))
                 
-                logger.info(f"Moved {src_file.name} -> {product_type}/{new_filename}")
+                logger.info(f"Moved {src_file.name} -> products/{product_type}/")
                 
                 # Create metadata if enabled
                 if self.create_metadata:
@@ -207,49 +256,6 @@ class ProductOrganizer:
         
         return organized_files
     
-    def _generate_product_filename(self, original_filename: str, product_type: str) -> str:
-        """
-        Generate new filename following the naming convention:
-        {product}_{4chars_itemID}_{AOI}.tif
-        
-        Args:
-            original_filename: Original filename
-            product_type: Product type
-            
-        Returns:
-            New filename string
-        """
-        # Extract item ID (scene ID) from original filename
-        # Example: ETaDaily_landsat8_L2SP_30_LC08_20200105_amirkabir.tif
-        # We want the LC08 part (first 4 chars of scene ID)
-        
-        # Try to extract scene ID from filename
-        scene_match = re.search(r'(LC\d{2})', original_filename)
-        if scene_match:
-            scene_prefix = scene_match.group(1)  # e.g., LC08
-        else:
-            # Try alternative pattern
-            scene_match = re.search(r'(LT\d{2})', original_filename)
-            if scene_match:
-                scene_prefix = scene_match.group(1)
-            else:
-                scene_prefix = "unknown"
-        
-        # Extract date if present
-        date_match = re.search(r'(\d{8})', original_filename)
-        date_str = date_match.group(1) if date_match else "unknown"
-        
-        # Extract AOI name from original filename or use default
-        aoi = self.aoi_name
-        aoi_match = re.search(r'_(amirkabir|AOI|[\w]+)\.tif$', original_filename)
-        if aoi_match:
-            aoi = aoi_match.group(1)
-        
-        # Build new filename: {product}_{scene_prefix}_{date}_{aoi}.tif
-        new_filename = f"{product_type}_{scene_prefix}_{date_str}_{aoi}.tif"
-        
-        return new_filename
-    
     def _create_product_metadata(self, product_file: Path, product_type: str) -> None:
         """
         Create metadata JSON for a product file.
@@ -260,6 +266,7 @@ class ProductOrganizer:
         """
         try:
             import rasterio
+            import numpy as np
             
             metadata = {
                 'product_name': product_file.stem,
@@ -285,24 +292,30 @@ class ProductOrganizer:
                 metadata['nodata'] = src.nodata
                 
                 # Calculate statistics if possible
-                data = src.read(1)
-                import numpy as np
-                valid_data = data[~np.isnan(data)] if np.issubdtype(data.dtype, np.floating) else data
-                
-                if len(valid_data) > 0:
-                    metadata['statistics'] = {
-                        'min': float(np.min(valid_data)),
-                        'max': float(np.max(valid_data)),
-                        'mean': float(np.mean(valid_data)),
-                        'std': float(np.std(valid_data)),
-                    }
+                try:
+                    data = src.read(1)
+                    if np.issubdtype(data.dtype, np.floating):
+                        valid_data = data[~np.isnan(data)]
+                    else:
+                        valid_data = data[data != src.nodata] if src.nodata is not None else data.flatten()
+                    
+                    if len(valid_data) > 0:
+                        metadata['statistics'] = {
+                            'min': float(np.min(valid_data)),
+                            'max': float(np.max(valid_data)),
+                            'mean': float(np.mean(valid_data)),
+                            'std': float(np.std(valid_data)),
+                        }
+                except Exception as stat_err:
+                    logger.warning(f"Could not calculate statistics: {stat_err}")
             
-            # Save metadata to JSON
-            metadata_file = self.metadata_dir / f"{product_file.stem}_metadata.json"
+            # Save metadata to JSON in the product folder (metadata_in_product_folder=True)
+            metadata_file = product_file.parent / f"{product_file.stem}_metadata.json"
+            
             with open(metadata_file, 'w') as f:
                 json.dump(metadata, f, indent=2, default=str)
             
-            logger.info(f"Created metadata: {metadata_file.name}")
+            logger.debug(f"Created metadata: {metadata_file.name}")
             
         except Exception as e:
             logger.error(f"Failed to create metadata for {product_file.name}: {e}")
@@ -324,7 +337,8 @@ class ProductOrganizer:
                 'total_products': sum(len(v) for v in organized.values()),
             }
             
-            summary_file = self.metadata_dir / "organization_summary.json"
+            # Save summary in products directory
+            summary_file = self.products_dir / "organization_summary.json"
             with open(summary_file, 'w') as f:
                 json.dump(summary, f, indent=2, default=str)
             

@@ -1422,6 +1422,11 @@ class METRICPipeline:
             scene_id = self.data.metadata.get('scene_id', 'METRIC')
             date_str = self.data.acquisition_time.strftime('%Y%m%d') if self.data.acquisition_time else 'unknown'
             
+            # Debug: Log the values being passed to writer
+            logger.info(f"save_results: scene_id='{scene_id}'")
+            logger.info(f"save_results: date_str='{date_str}'")
+            logger.info(f"save_results: acquisition_time='{self.data.acquisition_time}'")
+            
             # Use the actual calibration result from the calibration step
             # The calibration result should be stored during the calibrate() step
             if hasattr(self, '_calibration_result'):

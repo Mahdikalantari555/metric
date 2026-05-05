@@ -517,8 +517,35 @@ class ETExtrapolator:
         logger.info("Fetching historical ET0 from %s to %s", start_date, end_date)
         
         # Calculate center coordinates for bounding box
-        lon = (bbox[0] + bbox[2]) / 2
-        lat = (bbox[1] + bbox[3]) / 2
+        # Check if bbox is in lat/lon (WGS84) or projected coordinates
+        min_lon, min_lat, max_lon, max_lat = bbox
+        
+        # If coordinates are clearly not in WGS84 range (lon: -180 to 180, lat: -90 to 90),
+        # assume they are in projected coordinates (e.g., UTM) and convert to lat/lon
+        if min_lon < -180 or min_lon > 180 or min_lat < -90 or min_lat > 90:
+            # Coordinates are in projected CRS (like UTM meters)
+            logger.info("Bbox appears to be in projected CRS, converting to WGS84...")
+            try:
+                from pyproj import Transformer, CRS
+                # Get the CRS from the source raster if available
+                source_crs = self.config.get('source_crs', 'EPSG:32639')  # Default to UTM zone 39N
+                transformer = Transformer.from_crs(source_crs, "EPSG:4326", always_xy=True)
+                # Transform the center point
+                center_lon, center_lat = transformer.transform(
+                    (min_lon + max_lon) / 2,
+                    (min_lat + max_lat) / 2
+                )
+                lon, lat = center_lon, center_lat
+                logger.info(f"Converted bbox center to WGS84: lon={lon:.4f}, lat={lat:.4f}")
+            except Exception as e:
+                logger.warning(f"Failed to convert bbox to WGS84: {e}")
+                # Fallback: use centroid assuming Tehran area
+                lon, lat = 51.4, 35.7
+                logger.warning(f"Using fallback coordinates: lon={lon}, lat={lat}")
+        else:
+            # Coordinates are already in WGS84
+            lon = (min_lon + max_lon) / 2
+            lat = (min_lat + max_lat) / 2
         
         # API URL and parameters
         url = "https://archive-api.open-meteo.com/v1/archive"
