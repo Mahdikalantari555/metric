@@ -5,6 +5,7 @@ including GeoTIFF, NetCDF, CSV, and JSON formats.
 """
 
 from typing import Dict, Optional, Any, Union
+import re
 import numpy as np
 import xarray as xr
 import rasterio
@@ -32,12 +33,10 @@ def write_geotiff(
     if isinstance(data, xr.DataArray):
         data = data.values
     
-    nodata_value = -9999.0
+    nodata_value = nodata
     if np.issubdtype(dtype, np.integer) if dtype else False:
         data = np.where(np.isnan(data), 0, data)
         nodata_value = 0
-    else:
-        data = np.where(np.isnan(data), nodata_value, data)
 
     if dtype is None:
         dtype = 'float32' if data.dtype in [np.float32, np.float64] else data.dtype
@@ -351,7 +350,8 @@ class OutputWriter:
             ('Rn', 'R_n', 'float32'),
             ('G', 'G', 'float32'),
             ('H', 'H', 'float32'),
-            ('AirTemp', 'temperature_2m', 'float32')
+            ('AirTemp', 'temperature_2m', 'float32'),
+            ('dT', 'dT', 'float32')
         ],
         'quality': [
             ('ETqualityClass', 'ET_quality_class', 'uint8'),
@@ -390,13 +390,16 @@ class OutputWriter:
         if output_products is not None:
             self._output_products = output_products
         else:
-            self._output_products = (
+            # Build product list from categories
+            all_products = (
                 self.DEFAULT_PRODUCTS['required'] +
                 self.DEFAULT_PRODUCTS['optional'] +
                 self.DEFAULT_PRODUCTS['quality']
             )
             if include_surface_properties:
-                self._output_products += self.DEFAULT_PRODUCTS['surface']
+                all_products += self.DEFAULT_PRODUCTS['surface']
+            
+            self._output_products = all_products
         
         self.output_dir.mkdir(parents=True, exist_ok=True)
     

@@ -307,11 +307,12 @@ class ETExtrapolator:
             current_date += timedelta(days=1)
         
         if not target_dates:
+            shape = etrf1.shape
             return {
-                'ETa_daily': np.array([]),
+                'ETa_daily': np.empty((0, *shape)),
                 'dates': [],
-                'etrf_interpolated': np.array([]),
-                'weights': np.array([])
+                'etrf_interpolated': np.empty((0, *shape)),
+                'weights': np.empty((0, *shape))
             }
         
         # Extract ET0 data for target dates
@@ -391,31 +392,16 @@ class ETExtrapolator:
         eta_daily = []
         weights = []
         
-        # Get ET0 for scene dates from the full dataset passed to _interpolate_gap
-        # We'll use the gap ET0 values at boundaries as approximation
-        # (In practice, scene1 and scene2 dates are at the boundaries of the gap)
-        et0_scene1_val = et0_gap.isel(time=0).values if len(target_dates) > 0 else None
-        et0_scene2_val = et0_gap.isel(time=-1).values if len(target_dates) > 0 else None
-        
-        # Handle scalar ET0 values
-        if et0_scene1_val is not None and np.ndim(et0_scene1_val) == 0:
-            et0_scene1_val = float(et0_scene1_val)
-        if et0_scene2_val is not None and np.ndim(et0_scene2_val) == 0:
-            et0_scene2_val = float(et0_scene2_val)
-        
-        eta_scene1 = etrf1 * et0_scene1_val if et0_scene1_val is not None else etrf1
-        eta_scene2 = etrf2 * et0_scene2_val if et0_scene2_val is not None else etrf2
-        
         for i, target_date in enumerate(target_dates):
             days_from_scene1 = (target_date - date1).days
             days_to_scene2 = (date2 - target_date).days
             
-            # Calculate weights
+            # Calculate weights (inverse distance weighting)
             w1 = days_to_scene2 / total_days
             w2 = days_from_scene1 / total_days
             
-            # Weighted ETa
-            eta_t = w1 * eta_scene1 + w2 * eta_scene2
+            # Weighted ETa using ETrF from each scene and corresponding ET0
+            eta_t = w1 * etrf1 * et0_values[i] + w2 * etrf2 * et0_values[i]
             eta_t = np.clip(eta_t, self.config["min_et_daily"], self.config["max_et_daily"])
             
             eta_daily.append(eta_t)

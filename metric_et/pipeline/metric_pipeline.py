@@ -867,6 +867,12 @@ class METRICPipeline:
             if rn is None:
                 raise ValueError("Net radiation (R_n) not found. Calculate radiation balance first.")
 
+            # Guard: if Rn has no valid data, skip G calculation
+            rn_valid = rn.values[~np.isnan(rn.values)] if hasattr(rn, 'values') else rn[~np.isnan(rn)]
+            if len(rn_valid) == 0:
+                logger.warning("No valid Rn data after cloud masking, skipping soil heat flux calculation")
+                return
+
             # Get required inputs
             ndvi = self.data.get("ndvi")
             ts_kelvin = self.data.get("lst")

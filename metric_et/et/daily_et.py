@@ -49,15 +49,13 @@ class DailyETConfig:
     # Minimum daily ET (mm/day)
     min_et_daily: float = 0.0
     
-    # Maximum daily ET (mm/day) - configurable for different regions
-    max_et_daily: float = 30.0
+    # Maximum daily ET (mm/day) - fixed at 20.0
+    max_et_daily: float = 20.0
     
     # Time factor for ETr extrapolation (default = 24)
     time_factor: float = 24.0
     
-    # Fraction of daylight hours (regional adaptation)
-    # FIX: Set to 1.0 by default - daylight fraction should NOT be multiplied
-    # The ETrF already accounts for the ratio, additional multiplication causes underestimation
+    # Daylight fraction - always 1.0 (no reduction)
     daylight_fraction: float = 1.0
     
     # Minimum valid ETrF
@@ -65,11 +63,6 @@ class DailyETConfig:
     
     # Maximum valid ETrF
     max_etrf: float = 2.0
-    
-    # Regional adaptations
-    # FIX: Set daylight_fraction to 1.0 - do not reduce ET
-    region_max_et_daily: float = 30.0
-    region_daylight_fraction: float = 1.0
     
     # Diurnal distribution option
     use_diurnal_distribution: bool = False
@@ -107,12 +100,6 @@ class DailyET:
             config: Optional configuration parameters. Uses defaults if not provided.
         """
         self.config = config or DailyETConfig()
-        
-        # Apply regional adaptations
-        if self.config.region_max_et_daily != self.config.max_et_daily:
-            self.config.max_et_daily = self.config.region_max_et_daily
-        if self.config.region_daylight_fraction != self.config.daylight_fraction:
-            self.config.daylight_fraction = self.config.region_daylight_fraction
 
     def _to_numpy(self, arr):
         """Convert array to numpy if it's xarray DataArray."""

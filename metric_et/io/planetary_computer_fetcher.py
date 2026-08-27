@@ -134,7 +134,7 @@ class PlanetaryComputerLandsatFetcher:
         min_cloud_cover: float = 0.0,
         resolution: float = 30.0,
         sort_by: str = 'date',
-        min_coverage_ratio: float = 0.55
+        min_coverage_ratio: float = 1
     ) -> List[Dict]:
         """
         Fetch and download Landsat scenes clipped to ROI.

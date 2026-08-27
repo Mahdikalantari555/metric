@@ -398,3 +398,30 @@ class ProductOrganizer:
                     }
         
         return stats
+
+
+def organize_products(
+    output_dir: str,
+    aoi_name: str = "AOI",
+    create_metadata: bool = True,
+    metadata_in_product_folder: bool = True
+) -> Dict[str, List[str]]:
+    """
+    Convenience function to organize products in a single call.
+    
+    Args:
+        output_dir: Base output directory containing products
+        aoi_name: Area of Interest name for file naming
+        create_metadata: Whether to create metadata JSON files
+        metadata_in_product_folder: If True, save metadata in each product's folder
+        
+    Returns:
+        Dictionary mapping product types to lists of organized file paths
+    """
+    organizer = ProductOrganizer(
+        output_dir=output_dir,
+        aoi_name=aoi_name,
+        create_metadata=create_metadata,
+        metadata_in_product_folder=metadata_in_product_folder
+    )
+    return organizer.organize()

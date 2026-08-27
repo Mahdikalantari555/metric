@@ -73,7 +73,8 @@ class METRICWorkflow:
         source_crs: str = "EPSG:4326",
         interpolation_method: str = "weighted",
         extrapolation_days: int = 14,
-        include_surface: bool = True
+        include_surface: bool = True,
+        products: Optional[List[str]] = None
     ):
         """
         Initialize METRIC workflow.
@@ -89,6 +90,7 @@ class METRICWorkflow:
             interpolation_method: Method for ET interpolation ('linear' or 'weighted')
             extrapolation_days: Number of days to extrapolate beyond last scene
             include_surface: Whether to include surface properties in output
+            products: List of product names to generate. None = all products.
         """
         self.roi_path = roi_path
         self.output_dir = Path(output_dir).resolve()
@@ -184,6 +186,7 @@ class METRICWorkflow:
         self.interpolation_method = interpolation_method
         self.extrapolation_days = extrapolation_days
         self.include_surface = include_surface
+        self.products = products
         
         # Create output subdirectories
         self.scenes_dir = self.output_dir / "scenes"
@@ -224,6 +227,7 @@ class METRICWorkflow:
             'extrapolation_dates': 0,
             'products_organized': 0,
         }
+        errors = []
         
         try:
             # Step 1: Fetch Landsat scenes
@@ -295,7 +299,7 @@ class METRICWorkflow:
             logger.info(f"Output directory: {self.output_dir}")
             
             # Save workflow summary
-            self._save_workflow_summary(results)
+            self._save_workflow_summary(results, errors=errors)
             
             return results
             
@@ -457,7 +461,7 @@ class METRICWorkflow:
                     'calibration': {
                         'method': 'automatic'
                     },
-                    'output_products': None,  # Use default products
+                    'output_products': self.products,  # Custom product list or None for all
                     'include_surface_properties': self.include_surface,
                     'aoi_name': self.aoi_name
                 }
@@ -552,7 +556,7 @@ class METRICWorkflow:
                 "extrapolation_days": self.extrapolation_days,
                 "interpolation_method": self.interpolation_method,
                 "min_et_daily": 0.0,
-                "max_et_daily": 15.0,
+                "max_et_daily": 20.0,
                 "etrf_min": 0.0,
                 "etrf_max": 1.5,
                 "source_crs": source_crs
@@ -681,7 +685,9 @@ class METRICWorkflow:
             return interp_result, extrap_result
             
         except Exception as e:
-            logger.error(f"Interpolation/extrapolation failed: {e}")
+            error_msg = f"Interpolation/extrapolation failed: {e}"
+            logger.error(error_msg)
+            errors.append(error_msg)
             return None, None
     
     def _save_interpolated_results(self, result: Dict, prefix: str) -> None:
@@ -726,12 +732,11 @@ class METRICWorkflow:
                 break
             
             eta_data = eta_daily[i]
-            eta_data = np.where(np.isnan(eta_data), -9999.0, eta_data)
             
             date_str = date.strftime('%Y%m%d') if hasattr(date, 'strftime') else str(date).replace('-', '')
             
             # Save in ETaDaily folder with _interpolated or _extrapolated suffix
-            output_file = eta_daily_product_dir / f"ETaDaily_interpolated_{date_str}_{self.aoi_name}.tif"
+            output_file = eta_daily_product_dir / f"ETaDaily_{prefix}_{date_str}_{self.aoi_name}.tif"
             
             with rasterio.open(
                 output_file,
@@ -744,7 +749,7 @@ class METRICWorkflow:
                 crs=crs,
                 transform=transform,
                 compress='lzw',
-                nodata=-9999.0
+                nodata=np.nan
             ) as dst:
                 dst.write(eta_data.astype('float32'), 1)
             
@@ -808,12 +813,13 @@ class METRICWorkflow:
             logger.error(f"Interpolated product organization failed: {e}")
             return {}
     
-    def _save_workflow_summary(self, results: Dict) -> None:
+    def _save_workflow_summary(self, results: Dict, errors: Optional[List[str]] = None) -> None:
         """
         Save workflow summary to JSON file.
         
         Args:
             results: Workflow results dictionary
+            errors: Optional list of error messages encountered during workflow
         """
         summary = {
             'workflow_completion_time': datetime.now().isoformat(),
@@ -829,7 +835,8 @@ class METRICWorkflow:
             'interpolation_method': self.interpolation_method,
             'extrapolation_days': self.extrapolation_days,
             'include_surface_properties': self.include_surface,
-            'results': results
+            'results': results,
+            'errors': errors or []
         }
         
         summary_file = self.output_dir / "workflow_summary.json"
@@ -892,8 +899,18 @@ def main():
         '--no-surface', action='store_true',
         help='Disable surface properties in output'
     )
+    parser.add_argument(
+        '--products', type=str, default=None,
+        help='Comma-separated list of products to generate (e.g., "ETaDaily,ETrF,NDVI,LST"). '
+             'If not specified, all products are generated.'
+    )
     
     args = parser.parse_args()
+    
+    # Parse products list
+    products = None
+    if args.products:
+        products = [p.strip() for p in args.products.split(',')]
     
     # Create and run workflow
     workflow = METRICWorkflow(
@@ -906,7 +923,8 @@ def main():
         source_crs=args.source_crs,
         interpolation_method=args.interpolation_method,
         extrapolation_days=args.extrapolation_days,
-        include_surface=not args.no_surface
+        include_surface=not args.no_surface,
+        products=products
     )
     
     results = workflow.run()

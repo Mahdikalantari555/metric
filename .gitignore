@@ -2,3 +2,7 @@ __pycache__/
 .pytest_cache/
 *.pyc
 *.pyo
+in-memoria.db
+test/
+in-memoria-vectors.db/
+todo.md
