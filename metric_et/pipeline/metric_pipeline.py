@@ -39,10 +39,18 @@ class METRICPipeline:
         logger = logging.getLogger(__name__)
 
         try:
-            logger.info("Starting METRIC ETa processing pipeline")
+            logger.info("=" * 60)
+            logger.info("METRICPipeline.run() - STARTING")
+            logger.info("=" * 60)
+            logger.info(f"Landsat directory: {landsat_dir}")
+            logger.info(f"Output directory: {output_dir}")
+            logger.info(f"ROI path: {roi_path}")
+            logger.info(f"Config: {self.config}")
 
             # Step 1: Load and preprocess data
+            logger.info("-" * 60)
             logger.info("Step 1: Loading and preprocessing data")
+            logger.info("-" * 60)
             self.load_data(landsat_dir, meteo_data, roi_path=roi_path)
             self.preprocess()
 
@@ -52,19 +60,27 @@ class METRICPipeline:
             logger.info(f"Processing scene: {scene_id}")
 
             # Step 2: Calculate surface properties
+            logger.info("-" * 60)
             logger.info("Step 2: Calculating surface properties")
+            logger.info("-" * 60)
             self.calculate_surface_properties()
 
             # Step 3: Calculate radiation balance (Rn)
+            logger.info("-" * 60)
             logger.info("Step 3: Calculating radiation balance")
+            logger.info("-" * 60)
             self.calculate_radiation_balance()
 
             # Step 4: Calculate soil heat flux (G) - calibration-free
+            logger.info("-" * 60)
             logger.info("Step 4: Calculating soil heat flux")
+            logger.info("-" * 60)
             self.calculate_soil_heat_flux()
 
             # Step 5: Apply unified METRIC calibration pipeline
+            logger.info("-" * 60)
             logger.info("Step 5: Applying unified METRIC calibration pipeline")
+            logger.info("-" * 60)
             self.calibrate()
 
             # Check if scene was rejected by decision logic
@@ -78,21 +94,29 @@ class METRICPipeline:
                 # Continue to ET calculation instead of returning early
             
             # Step 6: Calculate final ET
+            logger.info("-" * 60)
             logger.info("Step 6: Calculating evapotranspiration")
+            logger.info("-" * 60)
             self.calculate_et()
 
             # Step 7: Save results if output directory provided
             if output_dir:
+                logger.info("-" * 60)
                 logger.info("Step 7: Saving results")
+                logger.info("-" * 60)
                 self.save_results(output_dir)
 
-            logger.info("METRIC ETa processing pipeline completed successfully")
+            logger.info("=" * 60)
+            logger.info("METRICPipeline.run() - COMPLETED SUCCESSFULLY")
+            logger.info("=" * 60)
 
             # Return results
             return self.get_results()
 
         except Exception as e:
             logger.error(f"Pipeline execution failed: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             raise
     
     def load_data(
@@ -123,6 +147,14 @@ class METRICPipeline:
         logger = logging.getLogger(__name__)
 
         try:
+            logger.info("=" * 60)
+            logger.info("METRICPipeline.load_data() - STARTING")
+            logger.info("=" * 60)
+            logger.info(f"Landsat source: {landsat_source}")
+            logger.info(f"Meteo data keys: {list(meteo_data.keys()) if meteo_data else 'empty'}")
+            logger.info(f"DEM path: {dem_path}")
+            logger.info(f"ROI path: {roi_path}")
+
             # Initialize DataCube
             self.data = DataCube()
 
@@ -150,9 +182,14 @@ class METRICPipeline:
                 )
             
             logger.info("Data loading completed successfully")
+            logger.info("=" * 60)
+            logger.info("METRICPipeline.load_data() - COMPLETED")
+            logger.info("=" * 60)
             
         except Exception as e:
             logger.error(f"Error loading data: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             raise
     
     def _load_from_local_directory(
@@ -172,21 +209,33 @@ class METRICPipeline:
         import logging
         logger = logging.getLogger(__name__)
 
+        logger.info("=" * 60)
+        logger.info("METRICPipeline._load_from_local_directory() - STARTING")
+        logger.info("=" * 60)
+        logger.info(f"Scene path: {scene_path}")
+        logger.info(f"ROI path: {roi_path}")
+
         # Load Landsat data
         band_mapping = self.config.get('band_mapping')
+        logger.info(f"Band mapping: {band_mapping}")
         landsat_reader = LandsatReader(band_mapping=band_mapping) if band_mapping else LandsatReader()
+        logger.info("Loading Landsat data...")
         landsat_cube = landsat_reader.load(scene_path)
+        logger.info(f"Landsat cube loaded with bands: {landsat_cube.bands()}")
 
         # Load ROI geometry for later use in final clipping (not for initial data loading)
         roi_path = roi_path or self.roi_path or "amirkabir.geojson"
+        logger.info(f"Loading ROI geometry from: {roi_path}")
         import geopandas as gpd
         roi_gdf = gpd.read_file(roi_path)
+        logger.info(f"ROI loaded: {len(roi_gdf)} feature(s)")
         # Reproject ROI to match raster CRS from DataCube
         roi_gdf = roi_gdf.to_crs(landsat_cube.crs)
         self._roi_geom = roi_gdf.geometry.iloc[0]  # Store ROI geometry for later use
         logger.info("Loaded ROI geometry for final clipping")
 
         # Copy Landsat data to main cube
+        logger.info("Copying Landsat data to main cube...")
         for band_name in landsat_cube.bands():
             band_data = landsat_cube.get(band_name)
             # Ensure rioxarray integration is available for spatial operations
@@ -194,6 +243,7 @@ class METRICPipeline:
                 import rioxarray
                 band_data = band_data.rio.write_crs(landsat_cube.crs)
             self.data.add(band_name, band_data)
+        logger.info(f"Main cube now has bands: {self.data.bands()}")
 
         # Copy metadata
         self.data.metadata.update(landsat_cube.metadata)
@@ -201,6 +251,7 @@ class METRICPipeline:
         self.data.transform = landsat_cube.transform
         self.data.extent = landsat_cube.extent
         self.data.acquisition_time = landsat_cube.acquisition_time
+        logger.info(f"Metadata copied: scene_id={self.data.metadata.get('scene_id')}")
 
         # Fix acquisition time if it's at midnight (no time info in MTL)
         if self.data.acquisition_time and self.data.acquisition_time.time() == datetime.min.time():
@@ -225,25 +276,31 @@ class METRICPipeline:
         min_lon, min_lat = transformer.transform(full_scene_bounds[0], full_scene_bounds[1])
         max_lon, max_lat = transformer.transform(full_scene_bounds[2], full_scene_bounds[3])
         full_scene_extent = (min_lon, min_lat, max_lon, max_lat)
+        logger.info(f"Full scene extent (lat/lon): {full_scene_extent}")
 
         # Initialize dynamic weather fetcher
         from ..io.dynamic_weather_fetcher import DynamicWeatherFetcher
         weather_config = self.config.get('weather', {})
         grid_spacing = weather_config.get('grid_spacing_km', 9.0)
+        logger.info(f"Initializing weather fetcher with grid_spacing={grid_spacing}km")
         weather_fetcher = DynamicWeatherFetcher(grid_spacing_km=grid_spacing)
 
         try:
             # Fetch spatially varying weather data using full scene extent
             # Pass the target CRS to transform coordinates from projected CRS to WGS84
+            logger.info("Fetching weather data...")
             weather_arrays = weather_fetcher.fetch_weather_for_scene(
                 scene_path, target_coords, full_scene_extent, target_crs=self.data.crs
             )
+            logger.info(f"Weather data fetched: {list(weather_arrays.keys())}")
 
             # Convert temperature from Celsius to Kelvin
             if "temperature_2m" in weather_arrays:
                 weather_arrays["temperature_2m"] = weather_arrays["temperature_2m"] + 273.15
+                logger.info("Converted temperature to Kelvin")
 
             # Add weather data to cube
+            logger.info("Adding weather data to cube...")
             for var_name, array in weather_arrays.items():
                 self.data.add(var_name, array)
 
@@ -251,7 +308,13 @@ class METRICPipeline:
 
         except Exception as e:
             logger.error(f"Failed to fetch dynamic weather data: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             raise
+        
+        logger.info("=" * 60)
+        logger.info("METRICPipeline._load_from_local_directory() - COMPLETED")
+        logger.info("=" * 60)
     
     def _load_from_planetary_computer(
         self,

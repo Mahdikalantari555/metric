@@ -7,6 +7,7 @@ Microsoft Planetary Computer's STAC API at runtime.
 import json
 import logging
 import os
+import warnings
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
@@ -31,6 +32,11 @@ from .errors import (
 )
 from .landsat_reader import LandsatReader
 
+# Fix PROJ database conflict with PostgreSQL on Windows
+# Remove PROJ_LIB to use rasterio's bundled PROJ database instead of PostgreSQL's older version
+if 'PROJ_LIB' in os.environ:
+    del os.environ['PROJ_LIB']
+
 logger = logging.getLogger(__name__)
 
 # Band mapping for MPC STAC assets - matches LandsatReader.DEFAULT_BAND_MAPPING
@@ -47,6 +53,21 @@ MPC_BAND_MAPPING = {
 
 # Required bands for METRIC processing
 REQUIRED_BANDS = ['blue', 'green', 'red', 'nir08', 'swir16', 'swir22', 'lwir11', 'qa_pixel']
+
+# Sentinel-2 specific band mapping for MPC STAC assets
+SENTINEL_BAND_MAPPING = {
+    'blue': 'B02',
+    'green': 'B03',
+    'red': 'B04',
+    'nir08': 'B08',
+    'swir16': 'B11',
+    'swir22': 'B12',
+    'qa60': 'QA60',
+    'scl': 'SCL'
+}
+
+# Required bands for Sentinel-2 METRIC processing
+SENTINEL_REQUIRED_BANDS = ['blue', 'green', 'red', 'nir08', 'swir16', 'swir22', 'qa60', 'scl']
 
 
 class PlanetaryComputerLandsatFetcher:
@@ -764,3 +785,365 @@ class PlanetaryComputerLandsatFetcher:
             raise ValueError(f"Start date {start} is after end date {end}")
         
         return start, end
+
+
+class SentinelPlanetaryComputerFetcher(PlanetaryComputerLandsatFetcher):
+    """Fetcher for Sentinel-2 scenes from Microsoft Planetary Computer.
+
+    This class handles authentication, searching, and downloading Sentinel-2
+    L2A scenes from Planetary Computer's STAC API. It reuses geometry and
+    date normalization methods from the parent Landsat fetcher but uses the
+    ``sentinel-2-l2a`` STAC collection and maps internal band names
+    (blue, green, red, nir08, …) to Sentinel‑2 asset keys (B02, B03, B04, B08, …).
+    """
+
+    # Band mapping from internal (METRIC) names to Sentinel‑2 STAC asset keys
+    SENTINEL_BAND_MAPPING = {
+        'blue': 'B02',
+        'green': 'B03',
+        'red': 'B04',
+        'nir08': 'B08',
+        'swir16': 'B11',
+        'swir22': 'B12',
+    }
+
+    def __init__(
+        self,
+        collection: str = "sentinel-2-l2a",
+        bands: List[str] = None,
+        max_cloud_cover: float = 70.0,
+        source_crs: str = "EPSG:4326",
+    ) -> None:
+        # Use internal band names (blue, green, …) as the primary band list.
+        required = ['blue', 'green', 'red', 'nir08']
+        super().__init__(
+            collection=collection,
+            bands=bands or required,
+            max_cloud_cover=max_cloud_cover,
+            source_crs=source_crs,
+        )
+
+    def search_scenes(
+        self,
+        roi_geometry: Union[dict, BaseGeometry],
+        date_range: Tuple[Union[str, datetime], Union[str, datetime]],
+    ) -> List[Dict]:
+        """Search for available Sentinel-2 scenes.
+
+        Returns metadata dicts with ``id``, ``datetime``, ``cloud_cover``,
+        ``platform``, and ``geometry``.
+        """
+        roi_geometry = self._normalize_geometry(roi_geometry)
+        start_date, end_date = self._normalize_dates(date_range)
+
+        bbox = list(roi_geometry.bounds)
+        search_params = {
+            "collections": [self.collection],
+            "bbox": bbox,
+            "datetime": f"{start_date.isoformat()}/{end_date.isoformat()}",
+            "limit": 100,
+        }
+        try:
+            items = list(self.client.search(**search_params).items())
+        except Exception as e:
+            logger.error(f"STAC search failed: {e}")
+            raise AuthenticationError(f"STAC search failed: {e}") from e
+
+        results = []
+        for item in items:
+            cloud_cover = item.properties.get('cloud_cover', 0.0)
+            if cloud_cover <= self.max_cloud_cover:
+                results.append({
+                    'id': item.id,
+                    'datetime': item.datetime,
+                    'cloud_cover': cloud_cover,
+                    'platform': item.properties.get('platform'),
+                    'bbox': item.bbox,
+                    'geometry': item.geometry,
+                })
+        return results
+
+    def download_and_clip_bands(
+        self,
+        item,
+        bbox: List[float],
+        output_dir: Path,
+        resolution: float = 10.0,
+        min_coverage_ratio: float = 0.55,
+    ) -> Dict[str, Path]:
+        """Download and clip Sentinel-2 bands using rasterio directly.
+
+        Bands are saved as ``<internal_name>.tif`` (e.g. ``blue.tif``,
+        ``green.tif``, …) so that the downstream pipeline can load them by
+        their internal METRIC name.
+
+        This method uses rasterio's windowed reading to avoid file handle
+        issues that can occur with stackstac on Windows.
+        """
+        try:
+            import planetary_computer
+            signed_item = planetary_computer.sign(item)
+        except Exception as e:
+            raise AuthenticationError(
+                f"MPC authentication failed for {item.id}: {e}"
+            ) from e
+
+        utm_epsg = self._get_utm_epsg(bbox)
+        transformer = Transformer.from_crs("EPSG:4326", f"EPSG:{utm_epsg}", always_xy=True)
+        min_x, min_y = transformer.transform(bbox[0], bbox[1])
+        max_x, max_y = transformer.transform(bbox[2], bbox[3])
+        utm_bounds = (min_x, min_y, max_x, max_y)
+
+        # Resolve internal band names → Sentinel asset keys
+        asset_keys = [
+            self.SENTINEL_BAND_MAPPING[b]
+            for b in self.bands
+            if b in self.SENTINEL_BAND_MAPPING
+            and self.SENTINEL_BAND_MAPPING[b] in signed_item.assets
+        ]
+        if not asset_keys:
+            raise DownloadError(
+                f"No required bands found in Sentinel-2 item {item.id}. "
+                f"Available assets: {list(signed_item.assets.keys())}"
+            )
+
+        # Download and process each band individually to avoid file handle issues
+        downloaded_files: Dict[str, Path] = {}
+        asset_to_internal = {v: k for k, v in self.SENTINEL_BAND_MAPPING.items()}
+
+        for asset_key in asset_keys:
+            try:
+                # Get the asset href
+                asset_href = signed_item.assets[asset_key].href
+                logger.info(f"Downloading band {asset_key} from {asset_href[:80]}...")
+
+                import gc
+                import urllib.request
+                import tempfile
+                import io
+
+                # Download file to memory first using urllib (more reliable than rasterio for HTTP)
+                req = urllib.request.Request(
+                    asset_href,
+                    headers={'User-Agent': 'METRIC-ETa/1.0'}
+                )
+                with urllib.request.urlopen(req) as response:
+                    data_bytes = response.read()
+
+                # Read from bytes buffer - this is the key to avoiding WinError 32
+                # We never keep a file handle open from rasterio's perspective
+                with rasterio.open(io.BytesIO(data_bytes)) as src:
+                    src_crs = src.crs
+                    src_transform = src.transform
+
+                    from rasterio.windows import from_bounds
+                    window = from_bounds(utm_bounds[0], utm_bounds[1],
+                                        utm_bounds[2], utm_bounds[3], src_transform)
+
+                    data = src.read(1, window=window)
+                    out_transform = src.window_transform(window)
+                    nodata_val = src.nodata
+
+                # Delete the bytes to free memory
+                del data_bytes
+                gc.collect()
+
+                # Reproject if needed
+                out_crs = f"EPSG:{utm_epsg}"
+                if str(src_crs) != out_crs:
+                    from rasterio.warp import calculate_default_transform, reproject, Resampling
+                    dst_transform, dst_width, dst_height = calculate_default_transform(
+                        src_crs, out_crs,
+                        data.shape[1], data.shape[0],
+                        utm_bounds[0], utm_bounds[1], utm_bounds[2], utm_bounds[3]
+                    )
+                    dst_data = np.zeros((dst_height, dst_width), dtype=data.dtype)
+                    reproject(
+                        source=data, destination=dst_data,
+                        src_transform=out_transform, src_crs=src_crs,
+                        dst_transform=dst_transform, dst_crs=out_crs,
+                        resampling=Resampling.bilinear
+                    )
+                    data = dst_data
+                    out_transform = dst_transform
+
+                internal_name = asset_to_internal.get(asset_key, asset_key)
+                out_path = output_dir / f"{internal_name}.tif"
+
+                with rasterio.open(
+                    out_path, 'w',
+                    driver='GTiff',
+                    height=data.shape[0], width=data.shape[1],
+                    count=1, dtype=data.dtype,
+                    crs=out_crs, transform=out_transform,
+                    compress='lzw', nodata=nodata_val,
+                ) as dst:
+                    dst.write(data.astype(data.dtype), 1)
+
+                downloaded_files[internal_name] = out_path
+                logger.info(f"Saved Sentinel-2 band {internal_name} → {out_path}")
+
+                del data
+                gc.collect()
+
+            except Exception as e:
+                logger.warning(f"Failed to download band {asset_key}: {e}")
+                continue
+
+        if not downloaded_files:
+            raise DownloadError(f"No bands could be downloaded for {item.id}")
+
+        # Coverage check (first downloaded band)
+        if downloaded_files:
+            first_name = list(downloaded_files.keys())[0]
+            first_path = downloaded_files[first_name]
+            if first_path.exists():
+                with rasterio.open(str(first_path)) as src:
+                    arr = src.read(1)
+                    nodata = src.nodata if src.nodata is not None else -9999
+                    valid = (arr != nodata) & (arr > 0)
+                    total = valid.size
+                    valid_count = int(np.count_nonzero(valid))
+                    if total > 0:
+                        ratio = valid_count / total
+                        logger.info(
+                            f"Valid coverage for {item.id}: {ratio:.3f} "
+                            f"({valid_count}/{total} pixels)"
+                        )
+                        if ratio < min_coverage_ratio:
+                            for f in downloaded_files.values():
+                                f.unlink(missing_ok=True)
+                            raise DownloadError(
+                                f"Scene {item.id} coverage {ratio:.1%} "
+                                f"< {min_coverage_ratio:.1%}"
+                            )
+        return downloaded_files
+
+    def _create_mtl_metadata(self, item, output_dir: Path) -> Path:
+        """Create an MTL.json from Sentinel-2 STAC properties."""
+        scene_id = item.id
+        scene_date = item.properties["datetime"][:10]
+        cloud_cover = item.properties.get('cloud_cover', 0.0)
+        platform = item.properties.get('platform', 'sentinel-2')
+        sensor = item.properties.get('instruments', ['MSI'])[0] if item.properties.get('instruments') else 'MSI'
+        sun_elev = item.properties.get("view:sun_elevation")
+        sun_az = item.properties.get("view:sun_azimuth")
+
+        mtl_data = {
+            "item_id": scene_id,
+            "datetime": scene_date,
+            "platform": platform,
+            "sensor": sensor,
+            "processing_level": "L2A",
+            "spacecraft": item.properties.get("constellation", "sentinel-2"),
+            "cloud_cover": cloud_cover,
+            "view:sun_elevation": sun_elev,
+            "view:sun_azimuth": sun_az,
+            "ggop:mgrs_grid": item.properties.get('mgrs:grid_code'),
+            "geometry": item.geometry,
+            "bbox": item.bbox,
+            "collection": item.collection_id,
+            "properties": item.properties,
+            "assets": list(item.assets.keys()),
+        }
+        mtl_data["METADATA"] = {
+            "PRODUCT_METADATA": {
+                "PRODUCT_ID": scene_id,
+                "ACQUISITION_DATE": scene_date,
+                "CLOUD_COVER": cloud_cover,
+                "PLATFORM": platform,
+                "SENSOR": sensor,
+                "PROCESSING_LEVEL": "L2A",
+            },
+            "SUN_PARAMETERS": {
+                "SUN_ELEVATION": sun_elev,
+                "SUN_AZIMUTH": sun_az,
+            },
+        }
+        mtl_path = output_dir / "MTL.json"
+        with open(mtl_path, 'w') as f:
+            json.dump(mtl_data, f, indent=2, default=str)
+        logger.info(f"Created Sentinel-2 MTL.json at {mtl_path}")
+        return mtl_path
+
+    def fetch_scenes(
+        self,
+        roi_geometry: Union[dict, BaseGeometry],
+        date_range: Tuple[Union[str, datetime], Union[str, datetime]],
+        output_dir: str,
+        min_cloud_cover: float = 0.0,
+        resolution: float = 10.0,
+        sort_by: str = "date",
+        min_coverage_ratio: float = 0.55,
+    ) -> List[Dict]:
+        """Fetch and download Sentinel-2 scenes from Planetary Computer.
+
+        This overrides the parent's :meth:`fetch_scenes` to use Sentinel-2
+        asset keys (B02, B03, …), write MTL.json with Sentinel-2 metadata,
+        and name scene directories ``sentinel_<date>``.
+
+        Args:
+            roi_geometry: GeoJSON dict or shapely geometry.
+            date_range: (start, end) tuple.
+            output_dir: Directory for scene sub-directories.
+            min_cloud_cover: Minimum cloud cover filter.
+            resolution: Output spatial resolution (m).
+            sort_by: ``'date'`` or ``'cloud_cover'``.
+            min_coverage_ratio: Minimum valid-pixel coverage.
+
+        Returns:
+            List of scene metadata dicts.
+        """
+        roi_geometry = self._normalize_geometry(roi_geometry)
+        roi_bbox = list(roi_geometry.bounds)
+        start_date, end_date = self._normalize_dates(date_range)
+
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+
+        # Search using bbox (inherited method uses self.collection)
+        items = self._search_scenes_by_bbox(roi_bbox, start_date, end_date, min_cloud_cover)
+        full_coverage_items = self._filter_full_coverage(roi_bbox, items)
+
+        if not full_coverage_items:
+            raise NoSceneFoundError("No Sentinel-2 scenes found with full ROI coverage")
+
+        if sort_by == "cloud_cover":
+            full_coverage_items.sort(key=lambda it: it.properties.get("cloud_cover", 100.0))
+        else:
+            full_coverage_items.sort(key=lambda it: it.datetime)
+
+        logger.info(f"Found {len(full_coverage_items)} qualifying Sentinel-2 scenes")
+
+        results: List[Dict] = []
+        for item in full_coverage_items:
+            scene_date = item.datetime.strftime("%Y%m%d") if item.datetime else "unknown"
+            scene_dir = output_path / f"sentinel_{scene_date}"
+            scene_dir.mkdir(parents=True, exist_ok=True)
+
+            try:
+                downloaded_files = self.download_and_clip_bands(
+                    item, roi_bbox, scene_dir, resolution, min_coverage_ratio,
+                )
+            except DownloadError as e:
+                logger.warning(f"Skipping scene {item.id}: {e}")
+                continue
+
+            mtl_path = self._create_mtl_metadata(item, scene_dir)
+
+            results.append({
+                "scene_id": item.id,
+                "date": item.datetime.strftime("%Y-%m-%d") if item.datetime else scene_date,
+                "cloud_cover": item.properties.get("eo:cloud_cover") or item.properties.get("cloud_cover", 0.0),
+                "directory": str(scene_dir),
+                "bands_downloaded": len(downloaded_files),
+                "mtl_file": str(mtl_path),
+                "band_files": downloaded_files,
+            })
+
+        if not results:
+            raise NoSceneFoundError(
+                f"No Sentinel-2 scenes with sufficient coverage. "
+                f"Tried {len(full_coverage_items)} scene(s)."
+            )
+        return results

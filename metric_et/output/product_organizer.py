@@ -30,6 +30,43 @@ from datetime import datetime
 from loguru import logger
 
 
+# Sentinel pipeline writes plain names like RGB.tif, NDVI.tif.
+# METRIC pipeline writes complex names like NDVI_LC08_20200105_amirkabir.tif.
+# PRODUCT_PATTERNS needs to handle both.
+PLAIN_PRODUCT_PATTERNS = {
+    'RGB': r'^RGB\.tif$',
+    'NDVI': r'^NDVI\.tif$',
+    'EVI': r'^EVI\.tif$',
+    'SAVI': r'^SAVI\.tif$',
+    'NDWI': r'^NDWI\.tif$',
+}
+
+METRIC_PRODUCT_PATTERNS = {
+    'ETaDaily': r'^(ETaDaily|ETa)_[A-Z0-9]+_[A-Z0-9_]+_[A-Z0-9]+_[A-Z0-9]+_[A-Z0-9]+_\d{4}-\d{2}-\d{2}_',
+    'ETinst': r'^ETinst_[A-Z0-9]+_[A-Z0-9_]+_[A-Z0-9]+_[A-Z0-9]+_[A-Z0-9]+_\d{4}-\d{2}-\d{2}_',
+    'ETrF': r'^ETrF_[A-Z0-9]+_[A-Z0-9_]+_[A-Z0-9]+_[A-Z0-9]+_[A-Z0-9]+_\d{4}-\d{2}-\d{2}_',
+    'LE': r'^LE_[A-Z0-9]+_[A-Z0-9_]+_[A-Z0-9]+_[A-Z0-9]+_[A-Z0-9]+_\d{4}-\d{2}-\d{2}_',
+    'ETqualityClass': r'^ETqualityClass_[A-Z0-9]+_[A-Z0-9_]+_[A-Z0-9]+_[A-Z0-9]+_[A-Z0-9]+_\d{4}-\d{2}-\d{2}_',
+    'ETaClassified': r'^ETaClassified_[A-Z0-9]+_[A-Z0-9_]+_[A-Z0-9]+_[A-Z0-9]+_[A-Z0-9]+_\d{4}-\d{2}-\d{2}_',
+    'CWSI': r'^CWSI_[A-Z0-9]+_[A-Z0-9_]+_[A-Z0-9]+_[A-Z0-9]+_[A-Z0-9]+_\d{4}-\d{2}-\d{2}_',
+    'Rn': r'^Rn_[A-Z0-9]+_[A-Z0-9_]+_[A-Z0-9]+_[A-Z0-9]+_[A-Z0-9]+_\d{4}-\d{2}-\d{2}_',
+    'G': r'^G_[A-Z0-9]+_[A-Z0-9_]+_[A-Z0-9]+_[A-Z0-9]+_[A-Z0-9]+_\d{4}-\d{2}-\d{2}_',
+    'H': r'^H_[A-Z0-9]+_[A-Z0-9_]+_[A-Z0-9]+_[A-Z0-9]+_[A-Z0-9]+_\d{4}-\d{2}-\d{2}_',
+    # METRIC naming convention: NDVI_<PLATFORM>_<SENSOR>_<LEVEL>_<RES>_<SCENEID>_<DATE>_<AOI>.tif
+    # Pattern allows 4+ underscore-separated segments ending with date
+    'NDVI': r'^NDVI_[A-Z0-9_]+_\d{4}-\d{2}-\d{2}',
+    'EVI': r'^EVI_[A-Z0-9_]+_\d{4}-\d{2}-\d{2}',
+    'LAI': r'^LAI_[A-Z0-9_]+_\d{4}-\d{2}-\d{2}',
+    'SAVI': r'^SAVI_[A-Z0-9_]+_\d{4}-\d{2}-\d{2}',
+    'FVC': r'^FVC_[A-Z0-9_]+_\d{4}-\d{2}-\d{2}',
+    'LST': r'^LST_[A-Z0-9_]+_\d{4}-\d{2}-\d{2}',
+    'Albedo': r'^Albedo_[A-Z0-9_]+_\d{4}-\d{2}-\d{2}',
+    'RGB': r'^RGB_[A-Z0-9_]+_\d{4}-\d{2}-\d{2}',
+    'AirTemp': r'^AirTemp_[A-Z0-9_]+_\d{4}-\d{2}-\d{2}',
+    'NDWI': r'^NDWI_[A-Z0-9_]+_\d{4}-\d{2}-\d{2}',
+}
+
+
 class ProductOrganizer:
     """
     Organize METRIC ETa products into structured directories.
@@ -41,30 +78,8 @@ class ProductOrganizer:
     - Generating metadata for each product
     """
     
-    # Product type patterns for identification
-    # Key: product folder name, Value: regex pattern to match filename
-    PRODUCT_PATTERNS = {
-        'ETaDaily': r'^(ETaDaily|ETa)_.+_\d{8}_',  # Matches ETaDaily_*.tif, ETaDaily_interpolated_*.tif
-        'ETinst': r'^ETinst_',
-        'ETrF': r'^ETrF_',
-        'LE': r'^LE_',
-        'ETqualityClass': r'^ETqualityClass_',
-        'ETaClassified': r'^ETaClassified_',
-        'CWSI': r'^CWSI_',
-        'Rn': r'^Rn_',
-        'G': r'^G_',
-        'H': r'^H_',
-        'NDVI': r'^NDVI_',
-        'EVI': r'^EVI_',
-        'LAI': r'^LAI_',
-        'SAVI': r'^SAVI_',
-        'FVC': r'^FVC_',
-        'LST': r'^LST_',
-        'Albedo': r'^Albedo_',
-        'RGB': r'^RGB_',
-        'AirTemp': r'^AirTemp_',
-        'NDWI': r'^NDWI_',
-    }
+    # Combined: plain patterns (Sentinel pipeline) + METRIC patterns (full naming)
+    PRODUCT_PATTERNS = {**PLAIN_PRODUCT_PATTERNS, **METRIC_PRODUCT_PATTERNS}
     
     def __init__(
         self,
@@ -198,15 +213,25 @@ class ProductOrganizer:
         """
         Identify the product type from filename.
         
+        First tries plain patterns (Sentinel: RGB.tif, NDVI.tif), then
+        falls back to METRIC naming convention.
+        
         Args:
             filename: Name of the file
             
         Returns:
             Product type string or None if not recognized
         """
-        for product_type, pattern in self.PRODUCT_PATTERNS.items():
+        # First try plain patterns (Sentinel pipeline: RGB.tif, NDVI.tif, etc.)
+        for product_type, pattern in PLAIN_PRODUCT_PATTERNS.items():
             if re.match(pattern, filename, re.IGNORECASE):
                 return product_type
+        
+        # Then try METRIC naming convention
+        for product_type, pattern in METRIC_PRODUCT_PATTERNS.items():
+            if re.match(pattern, filename, re.IGNORECASE):
+                return product_type
+        
         return None
     
     def _organize_product_type(self, product_type: str, files: List[Path]) -> List[str]:
@@ -295,97 +320,81 @@ class ProductOrganizer:
                 try:
                     data = src.read(1)
                     if np.issubdtype(data.dtype, np.floating):
-                        valid_data = data[~np.isnan(data)]
+                        valid = data[~np.isnan(data)]
                     else:
-                        valid_data = data[data != src.nodata] if src.nodata is not None else data.flatten()
+                        valid = data[data != src.nodata] if src.nodata else data.flatten()
                     
-                    if len(valid_data) > 0:
+                    if len(valid) > 0:
                         metadata['statistics'] = {
-                            'min': float(np.min(valid_data)),
-                            'max': float(np.max(valid_data)),
-                            'mean': float(np.mean(valid_data)),
-                            'std': float(np.std(valid_data)),
+                            'min': float(np.min(valid)),
+                            'max': float(np.max(valid)),
+                            'mean': float(np.mean(valid)),
+                            'std': float(np.std(valid)),
+                            'valid_pixels': len(valid),
+                            'total_pixels': data.size,
                         }
-                except Exception as stat_err:
-                    logger.warning(f"Could not calculate statistics: {stat_err}")
+                except Exception:
+                    pass
             
-            # Save metadata to JSON in the product folder (metadata_in_product_folder=True)
-            metadata_file = product_file.parent / f"{product_file.stem}_metadata.json"
+            # Write metadata file
+            meta_path = product_file.with_suffix('.json')
+            with open(meta_path, 'w', encoding='utf-8') as f:
+                json.dump(metadata, f, indent=2)
             
-            with open(metadata_file, 'w') as f:
-                json.dump(metadata, f, indent=2, default=str)
-            
-            logger.debug(f"Created metadata: {metadata_file.name}")
+            logger.debug(f"Created metadata for {product_file.name}")
             
         except Exception as e:
-            logger.error(f"Failed to create metadata for {product_file.name}: {e}")
+            logger.warning(f"Failed to create metadata for {product_file}: {e}")
     
     def _create_summary_metadata(self, organized: Dict[str, List[str]]) -> None:
         """
-        Create summary metadata for all organized products.
+        Create summary metadata for organized products.
         
         Args:
-            organized: Dictionary of organized products
+            organized: Dictionary of product type -> list of file paths
         """
         try:
             summary = {
-                'organization_date': datetime.now().isoformat(),
-                'source_directory': str(self.output_dir),
-                'products_directory': str(self.products_dir),
+                'created': datetime.now().isoformat(),
                 'aoi_name': self.aoi_name,
-                'product_counts': {k: len(v) for k, v in organized.items()},
-                'total_products': sum(len(v) for v in organized.values()),
+                'output_dir': str(self.output_dir),
+                'products_dir': str(self.products_dir),
+                'products': {}
             }
             
-            # Save summary in products directory
-            summary_file = self.products_dir / "organization_summary.json"
-            with open(summary_file, 'w') as f:
-                json.dump(summary, f, indent=2, default=str)
+            for product_type, files in organized.items():
+                summary['products'][product_type] = {
+                    'count': len(files),
+                    'files': files,
+                    'directory': str(self.products_dir / product_type),
+                }
             
-            logger.info(f"Created organization summary: {summary_file.name}")
+            summary_path = self.products_dir / "summary_metadata.json"
+            with open(summary_path, 'w', encoding='utf-8') as f:
+                json.dump(summary, f, indent=2)
+            
+            logger.info(f"Created summary metadata at {summary_path}")
             
         except Exception as e:
-            logger.error(f"Failed to create summary metadata: {e}")
-
-
-def organize_products(
-    output_dir: str,
-    aoi_name: str = "AOI",
-    create_metadata: bool = True
-) -> Dict[str, List[str]]:
-    """
-    Convenience function to organize products in output directory.
+            logger.warning(f"Failed to create summary metadata: {e}")
     
-    Args:
-        output_dir: Base output directory containing products
-        aoi_name: Area of Interest name
-        create_metadata: Whether to create metadata JSON files
+    def get_product_statistics(self) -> Dict[str, Dict]:
+        """
+        Get statistics for all organized products.
         
-    Returns:
-        Dictionary mapping product types to lists of organized file paths
-    """
-    organizer = ProductOrganizer(
-        output_dir=output_dir,
-        aoi_name=aoi_name,
-        create_metadata=create_metadata
-    )
-    return organizer.organize()
-
-
-if __name__ == "__main__":
-    # Example usage
-    import sys
-    
-    if len(sys.argv) < 2:
-        print("Usage: python product_organizer.py <output_dir> [aoi_name]")
-        sys.exit(1)
-    
-    output_dir = sys.argv[1]
-    aoi_name = sys.argv[2] if len(sys.argv) > 2 else "AOI"
-    
-    result = organize_products(output_dir, aoi_name)
-    
-    print(f"\nOrganization complete!")
-    print(f"Products organized: {sum(len(v) for v in result.values())}")
-    for product_type, files in result.items():
-        print(f"  {product_type}: {len(files)} files")
+        Returns:
+            Dictionary mapping product types to their statistics
+        """
+        stats = {}
+        
+        for product_dir in self.products_dir.iterdir():
+            if product_dir.is_dir():
+                tif_files = list(product_dir.glob("*.tif"))
+                if tif_files:
+                    stats[product_dir.name] = {
+                        'count': len(tif_files),
+                        'total_size_mb': sum(f.stat().st_size for f in tif_files) / (1024 * 1024),
+                        'files': [f.name for f in tif_files],
+                    }
+        
+        return stats

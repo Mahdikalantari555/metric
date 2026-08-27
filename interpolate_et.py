@@ -532,8 +532,8 @@ class ETInterpolator:
                     nodata=-9999.0
                 )
         
-        # Save combined NetCDF
-        self._save_netcdf(interpolation_result, extrapolation_result)
+        # Save combined NetCDF (disabled: no longer generating ETa_daily_combined.nc)
+        # self._save_netcdf(interpolation_result, extrapolation_result)
         
         # Save summary CSV
         self._save_summary(interpolation_result, extrapolation_result)

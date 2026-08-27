@@ -407,50 +407,138 @@ class OutputWriter:
         date: str,
         extension: str
     ) -> Path:
-        """Generate output filename: {PRODUCT}_{SCENE_PREFIX}_{DATE}_{AOI}.{extension}"""
+        """Generate output filename: {PRODUCT}_{PLATFORM}_{SENSOR}_{LEVEL}_{RESOLUTION}_{SCENEID}_{DATE}_{AOI}.{extension}"""
         import re
         import logging
         logger = logging.getLogger(__name__)
         
         metadata = cube.metadata
+        
+        # Get platform (e.g., 'S2', 'S2A', 'S2B', 'landsat-8', 'landsat-9')
+        platform_raw = metadata.get('platform', 'unknown')
+        platform = self._extract_platform(platform_raw)
+        
+        # Get sensor (e.g., 'MSI', 'OLI_TIRS')
+        sensor = metadata.get('sensor', 'unknown')
+        
+        # Get processing level (e.g., 'L2A', 'L1C', 'L1GT')
+        level = metadata.get('processing_level', 'unknown')
+        
+        # Get resolution (e.g., '10', '20', '30')
+        resolution = metadata.get('resolution', 'unknown')
+        
+        # Get scene_id
         scene_id_raw = metadata.get('scene_id', 'unknown')
         
-        logger.debug("_make_filename: raw scene_id='%s'", scene_id_raw)
-        
-        # Extract scene_prefix: 2 letters + 2 digits (e.g., LC08, LE07)
-        prefix_match = re.search(r'([A-Z]{2}\d{2})', scene_id_raw)
-        if prefix_match:
-            scene_prefix = prefix_match.group(1)
-        else:
-            # Fallback: first 4 chars
-            scene_prefix = scene_id_raw[:4] if len(scene_id_raw) >= 4 else scene_id_raw
-        
-        logger.debug("_make_filename: scene_prefix='%s'", scene_prefix)
+        # Extract scene ID (numeric part like '454' from Sentinel scene IDs)
+        sceneid = self._extract_sceneid(scene_id_raw)
         
         # Get date from cube.acquisition_time (most reliable)
         date_clean = 'unknown'
         if cube.acquisition_time:
             try:
-                date_clean = cube.acquisition_time.strftime('%Y%m%d')
+                date_clean = cube.acquisition_time.strftime('%Y-%m-%d')
                 logger.debug("_make_filename: date from acquisition_time='%s'", date_clean)
             except Exception as e:
                 logger.warning("_make_filename: Failed to get date: %s", e)
         
-        # Fallback: extract 8-digit date from scene_id_raw
+        # Fallback: extract date from scene_id_raw
         if date_clean == 'unknown':
-            date_match = re.search(r'(\d{8})', scene_id_raw)
+            date_match = re.search(r'(\d{4}-\d{2}-\d{2}|\d{8})', scene_id_raw)
             if date_match:
-                date_clean = date_match.group(1)
+                date_str = date_match.group(1)
+                # Convert YYYYMMDD to YYYY-MM-DD if needed
+                if len(date_str) == 8 and '-' not in date_str:
+                    date_clean = f"{date_str[0:4]}-{date_str[4:6]}-{date_str[6:8]}"
+                else:
+                    date_clean = date_str
                 logger.debug("_make_filename: date from scene_id='%s'", date_clean)
         
         logger.debug("_make_filename: date_clean='%s'", date_clean)
         
         aoi = self._aoi_name
-        filename = f"{product}_{scene_prefix}_{date_clean}_{aoi}.{extension}"
+        filename = f"{product}_{platform}_{sensor}_{level}_{resolution}_{sceneid}_{date_clean}_{aoi}.{extension}"
         
         logger.debug("_make_filename: Generated '%s'", filename)
         
         return self.output_dir / filename
+    
+    def _extract_platform(self, platform_raw: str) -> str:
+        """Extract platform code from platform string.
+        
+        Args:
+            platform_raw: Raw platform string from metadata
+            
+        Returns:
+            Platform code (e.g., 'S2', 'S2A', 'S2B', 'L8', 'L9')
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        if not platform_raw or platform_raw == 'unknown':
+            return 'unknown'
+        
+        platform_str = str(platform_raw).lower().strip()
+        
+        # Sentinel-2 variants
+        if 'sentinel-2' in platform_str or 'sentinel2' in platform_str or platform_str.startswith('s2'):
+            if 's2a' in platform_str or 'sentinel-2a' in platform_str:
+                return 'S2A'
+            elif 's2b' in platform_str or 'sentinel-2b' in platform_str:
+                return 'S2B'
+            else:
+                return 'S2'
+        
+        # Landsat variants
+        elif 'landsat-9' in platform_str or 'landsat9' in platform_str or platform_str.endswith('9'):
+            return 'L9'
+        elif 'landsat-8' in platform_str or 'landsat8' in platform_str or platform_str.endswith('8'):
+            return 'L8'
+        elif 'landsat-7' in platform_str or 'landsat7' in platform_str or platform_str.endswith('7'):
+            return 'L7'
+        elif 'landsat-5' in platform_str or 'landsat5' in platform_str or platform_str.endswith('5'):
+            return 'L5'
+        else:
+            # Fallback: try to extract first letter and number
+            match = re.search(r'([A-Z]+[\d]+)', str(platform_raw))
+            if match:
+                return match.group(1)[:4]
+            return str(platform_raw)[:4] if len(str(platform_raw)) >= 4 else str(platform_raw)
+    
+    def _extract_sceneid(self, scene_id_raw: str) -> str:
+        """Extract scene ID (numeric identifier) from scene ID string.
+        
+        Args:
+            scene_id_raw: Raw scene ID string
+            
+        Returns:
+            Scene ID (e.g., '454' for Sentinel, 'LC08_170034_20220205' -> '170034')
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        if not scene_id_raw or scene_id_raw == 'unknown':
+            return 'unknown'
+        
+        scene_id_str = str(scene_id_raw)
+        
+        # For Sentinel: extract the numeric part (e.g., '454' from scene ID)
+        # Sentinel scene IDs often contain a unique numeric identifier
+        match = re.search(r'[_-]([\d]{3,})[_-]', scene_id_str)
+        if match:
+            return match.group(1)
+        
+        # For Landsat: extract path-row (e.g., '170034' from 'LC08_170034_20220205')
+        match = re.search(r'[_-]([\d]{6})[_-]', scene_id_str)
+        if match:
+            return match.group(1)
+        
+        # Fallback: try to find any 3+ digit number
+        match = re.search(r'([\d]{3,})', scene_id_str)
+        if match:
+            return match.group(1)
+        
+        return 'unknown'
     
     def write_et_products(
         self,
@@ -674,15 +762,111 @@ class ProductMetadataWriter:
         self.aoi_name = aoi_name
         self.output_dir.mkdir(parents=True, exist_ok=True)
     
+    def _extract_platform(self, platform_raw: str) -> str:
+        """Extract platform code from platform string.
+        
+        Args:
+            platform_raw: Raw platform string from metadata
+            
+        Returns:
+            Platform code (e.g., 'S2', 'S2A', 'S2B', 'L8', 'L9')
+        """
+        import re
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        if not platform_raw or platform_raw == 'unknown':
+            return 'unknown'
+        
+        platform_str = str(platform_raw).lower().strip()
+        
+        # Sentinel-2 variants
+        if 'sentinel-2' in platform_str or 'sentinel2' in platform_str or platform_str.startswith('s2'):
+            if 's2a' in platform_str or 'sentinel-2a' in platform_str:
+                return 'S2A'
+            elif 's2b' in platform_str or 'sentinel-2b' in platform_str:
+                return 'S2B'
+            else:
+                return 'S2'
+        
+        # Landsat variants
+        elif 'landsat-9' in platform_str or 'landsat9' in platform_str or platform_str.endswith('9'):
+            return 'L9'
+        elif 'landsat-8' in platform_str or 'landsat8' in platform_str or platform_str.endswith('8'):
+            return 'L8'
+        elif 'landsat-7' in platform_str or 'landsat7' in platform_str or platform_str.endswith('7'):
+            return 'L7'
+        elif 'landsat-5' in platform_str or 'landsat5' in platform_str or platform_str.endswith('5'):
+            return 'L5'
+        else:
+            # Fallback: try to extract first letter and number
+            match = re.search(r'([A-Z]+[\d]+)', str(platform_raw))
+            if match:
+                return match.group(1)[:4]
+            return str(platform_raw)[:4] if len(str(platform_raw)) >= 4 else str(platform_raw)
+    
+    def _extract_sceneid(self, scene_id_raw: str) -> str:
+        """Extract scene ID (numeric identifier) from scene ID string.
+        
+        Args:
+            scene_id_raw: Raw scene ID string
+            
+        Returns:
+            Scene ID (e.g., '454' for Sentinel, 'LC08_170034_20220205' -> '170034')
+        """
+        import re
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        if not scene_id_raw or scene_id_raw == 'unknown':
+            return 'unknown'
+        
+        scene_id_str = str(scene_id_raw)
+        
+        # For Sentinel: extract the numeric part (e.g., '454' from scene ID)
+        # Sentinel scene IDs often contain a unique numeric identifier
+        match = re.search(r'[_-]([\d]{3,})[_-]', scene_id_str)
+        if match:
+            return match.group(1)
+        
+        # For Landsat: extract path-row (e.g., '170034' from 'LC08_170034_20220205')
+        match = re.search(r'[_-]([\d]{6})[_-]', scene_id_str)
+        if match:
+            return match.group(1)
+        
+        # Fallback: try to find any 3+ digit number
+        match = re.search(r'([\d]{3,})', scene_id_str)
+        if match:
+            return match.group(1)
+        
+        return 'unknown'
+    
     def _make_geojson_path(self, product: str, cube: DataCube, date: str) -> Path:
         metadata = cube.metadata
+        
+        # Get platform
         platform_raw = metadata.get('platform', 'unknown')
-        platform = 'landsat8' if 'landsat-8' in str(platform_raw).lower() else ('landsat9' if 'landsat-9' in str(platform_raw).lower() else str(platform_raw).lower().replace(' ', '_'))
+        platform = self._extract_platform(platform_raw)
         
+        # Get sensor
+        sensor = metadata.get('sensor', 'unknown')
+        
+        # Get processing level
+        level = metadata.get('processing_level', 'unknown')
+        
+        # Get resolution
+        resolution = metadata.get('resolution', 'unknown')
+        
+        # Get scene ID
         scene_id_raw = metadata.get('scene_id', 'unknown')
-        scene_id_short = scene_id_raw.split('_')[0] if '_' in scene_id_raw else (scene_id_raw[:6] if len(scene_id_raw) >= 6 else scene_id_raw)
+        sceneid = self._extract_sceneid(scene_id_raw)
         
-        filename = f"META_{product}_{platform}_{scene_id_short}_{date}_{self.aoi_name}.geojson"
+        # Format date as YYYY-MM-DD if not already
+        date_clean = date
+        if len(date) == 8 and '-' not in date:
+            date_clean = f"{date[0:4]}-{date[4:6]}-{date[6:8]}"
+        
+        filename = f"META_{product}_{platform}_{sensor}_{level}_{resolution}_{sceneid}_{date_clean}_{self.aoi_name}.geojson"
         return self.output_dir / filename
     
     def write_cwsi_metadata(self, data: np.ndarray, cube: DataCube, date: str, masked_pixels_count: int = 0, cloud_cover_percent: Optional[float] = None) -> str:

@@ -39,6 +39,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Add detailed console logging
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+console_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+console_handler.setFormatter(console_formatter)
+logging.getLogger().addHandler(console_handler)
+
+logger.info("=" * 60)
+logger.info("run_metric_workflow.py - STARTING")
+logger.info("=" * 60)
+
 
 class METRICWorkflow:
     """
@@ -186,6 +197,13 @@ class METRICWorkflow:
         logger.info(f"Output directory: {output_dir}")
         logger.info(f"Date range: {start_date} to {end_date}")
         logger.info(f"AoI name: {aoi_name}")
+        logger.info(f"Max cloud cover: {self.max_cloud_cover}%")
+        logger.info(f"Source CRS: {self.source_crs}")
+        logger.info(f"Interpolation method: {self.interpolation_method}")
+        logger.info(f"Extrapolation days: {self.extrapolation_days}")
+        logger.info(f"Include surface: {self.include_surface}")
+        logger.info(f"Scenes directory: {self.scenes_dir}")
+        logger.info(f"ET output directory: {self.et_output_dir}")
     
     def run(self) -> Dict:
         """
@@ -212,9 +230,11 @@ class METRICWorkflow:
             logger.info("=" * 60)
             logger.info("STEP 1: Fetching Landsat scenes from Planetary Computer")
             logger.info("=" * 60)
+            logger.info(f"Scenes directory: {self.scenes_dir}")
             
             scenes = self._fetch_scenes()
             results['scenes_fetched'] = len(scenes)
+            logger.info(f"STEP 1 COMPLETE: Fetched {len(scenes)} scenes")
             
             if not scenes:
                 logger.error("No scenes found. Workflow aborted.")
@@ -226,10 +246,12 @@ class METRICWorkflow:
             logger.info("=" * 60)
             logger.info("STEP 2: Calculating ET for all scenes")
             logger.info("=" * 60)
+            logger.info(f"ET output directory: {self.et_output_dir}")
             
             processed_scenes = self._calculate_et_all(scenes)
             results['scenes_processed'] = len(processed_scenes)
             results['scenes_failed'] = len(scenes) - len(processed_scenes)
+            logger.info(f"STEP 2 COMPLETE: Processed {len(processed_scenes)} scenes, {results['scenes_failed']} failed")
             
             if not processed_scenes:
                 logger.error("No scenes processed successfully. Workflow aborted.")
@@ -245,8 +267,11 @@ class METRICWorkflow:
             interp_result, extrap_result = self._interpolate_et(processed_scenes)
             if interp_result:
                 results['interpolation_dates'] = len(interp_result.get('dates', []))
+                logger.info(f"Interpolated {results['interpolation_dates']} dates")
             if extrap_result:
                 results['extrapolation_dates'] = len(extrap_result.get('dates', []))
+                logger.info(f"Extrapolated {results['extrapolation_dates']} dates")
+            logger.info(f"STEP 3 COMPLETE: Interpolation/extrapolation done")
             
             # Step 4: Organize ALL products (scene + interpolated)
             logger.info("=" * 60)
@@ -255,6 +280,7 @@ class METRICWorkflow:
             
             organized = self._organize_products()
             results['products_organized'] = sum(len(v) for v in organized.values()) if organized else 0
+            logger.info(f"STEP 4 COMPLETE: Organized {results['products_organized']} products")
             
             # Summary
             logger.info("=" * 60)
@@ -275,6 +301,8 @@ class METRICWorkflow:
             
         except Exception as e:
             logger.error(f"Workflow failed: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             raise
     
     def _fetch_scenes(self) -> List[Dict]:
@@ -404,16 +432,23 @@ class METRICWorkflow:
         Returns:
             List of successfully processed scene dictionaries
         """
+        logger.info("=" * 60)
+        logger.info("_calculate_et_all() - STARTING")
+        logger.info("=" * 60)
         logger.info(f"Processing {len(scenes)} scenes with METRIC pipeline")
         
         processed = []
+        scene_num = 0
         
         for scene in scenes:
+            scene_num += 1
             scene_id = scene['scene_id']
             scene_date = scene['date']
             scene_dir = scene['directory']
             
-            logger.info(f"Processing scene: {scene_id} for date {scene_date}")
+            logger.info("-" * 60)
+            logger.info(f"Scene {scene_num}/{len(scenes)}: {scene_id}")
+            logger.info(f"Scene date: {scene_date}")
             logger.info(f"Scene directory: {scene_dir}")
             
             try:
@@ -426,25 +461,32 @@ class METRICWorkflow:
                     'include_surface_properties': self.include_surface,
                     'aoi_name': self.aoi_name
                 }
+                logger.info(f"Pipeline config: {config}")
                 
                 # Run METRIC pipeline
+                logger.info("Initializing METRICPipeline...")
                 pipeline = METRICPipeline(config=config)
                 
                 # Output directory for this scene
                 scene_output_dir = self.et_output_dir / f"result_{scene_date.replace('-', '')}"
+                logger.info(f"Scene output directory: {scene_output_dir}")
                 
                 # Run pipeline
+                logger.info("Running pipeline.run()...")
                 results = pipeline.run(
                     landsat_dir=scene_dir,
                     meteo_data={},  # Pipeline will fetch weather dynamically
                     output_dir=str(scene_output_dir),
                     roi_path=self.roi_path
                 )
+                logger.info(f"Pipeline.run() completed, results: {results}")
                 
                 # Check if output directory has products
                 if scene_output_dir.exists():
                     tif_files = list(scene_output_dir.glob("*.tif"))
                     logger.info(f"Scene {scene_id} produced {len(tif_files)} .tif files")
+                    for tif_file in tif_files:
+                        logger.info(f"  - {tif_file.name}")
                     if len(tif_files) == 0:
                         logger.warning(f"Scene {scene_id} - no .tif files in output directory!")
                 else:
@@ -469,6 +511,7 @@ class METRICWorkflow:
             failed_scenes = [s['scene_id'] for s in scenes if s not in processed]
             logger.warning(f"Failed scenes: {failed_scenes}")
         
+        logger.info("_calculate_et_all() - COMPLETED")
         return processed
     
     def _interpolate_et(self, processed_scenes: List[Dict]) -> tuple:
@@ -800,6 +843,10 @@ def main():
     """Main function for command-line usage."""
     import argparse
     
+    logger.info("=" * 60)
+    logger.info("run_metric_workflow.py main() - STARTING")
+    logger.info("=" * 60)
+    
     parser = argparse.ArgumentParser(
         description='Run unified METRIC workflow for ETa processing'
     )
@@ -863,6 +910,17 @@ def main():
     )
     
     results = workflow.run()
+    
+    logger.info("=" * 60)
+    logger.info("METRIC WORKFLOW COMPLETED")
+    logger.info("=" * 60)
+    logger.info(f"Scenes fetched: {results['scenes_fetched']}")
+    logger.info(f"Scenes processed: {results['scenes_processed']}")
+    logger.info(f"Scenes failed: {results['scenes_failed']}")
+    logger.info(f"Interpolation dates: {results['interpolation_dates']}")
+    logger.info(f"Extrapolation dates: {results['extrapolation_dates']}")
+    logger.info(f"Products organized: {results['products_organized']}")
+    logger.info("=" * 60)
     
     print("\n" + "=" * 60)
     print("METRIC WORKFLOW COMPLETED")

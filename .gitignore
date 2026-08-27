@@ -1,0 +1,10 @@
+.talkcody/
+.kilo/
+__pycache__/
+.pytest_cache/
+*.pyc
+*.pyo
+sentinel/
+backend/
+test/
+automation/
