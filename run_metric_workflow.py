@@ -74,11 +74,13 @@ class METRICWorkflow:
         interpolation_method: str = "weighted",
         extrapolation_days: int = 14,
         include_surface: bool = True,
-        products: Optional[List[str]] = None
+        products: Optional[List[str]] = None,
+        save_scenes: bool = True,
+        visualization: bool = False
     ):
         """
         Initialize METRIC workflow.
-        
+
         Args:
             roi_path: Path to ROI file (GeoJSON .geojson/.json or Shapefile .shp)
             output_dir: Base output directory
@@ -91,6 +93,10 @@ class METRICWorkflow:
             extrapolation_days: Number of days to extrapolate beyond last scene
             include_surface: Whether to include surface properties in output
             products: List of product names to generate. None = all products.
+            save_scenes: Whether to retain the scenes/ folder after processing.
+                         When False, scenes/ is deleted after product organization.
+            visualization: Whether to emit overview_<date>.png and et_map_<date>.png.
+                           Default False.
         """
         self.roi_path = roi_path
         self.output_dir = Path(output_dir).resolve()
@@ -187,14 +193,19 @@ class METRICWorkflow:
         self.extrapolation_days = extrapolation_days
         self.include_surface = include_surface
         self.products = products
-        
+        self.save_scenes = save_scenes
+        self.visualization = visualization
+
         # Create output subdirectories
         self.scenes_dir = self.output_dir / "scenes"
         self.scenes_dir.mkdir(parents=True, exist_ok=True)
-        self.et_output_dir = self.output_dir / "et_output"
-        self.et_output_dir.mkdir(parents=True, exist_ok=True)
-        # Note: No longer creating interpolated_dir - interpolated files go directly to ETaDaily folder
-        
+        # Transient staging dir replaces the old per-date et_output/result_<date> folders.
+        # Products land flat here, then are organized into output/products/.
+        self.staging_dir = self.output_dir / "_work"
+        self.staging_dir.mkdir(parents=True, exist_ok=True)
+        # Final products root (populated from staging after organization).
+        self.products_dir = self.output_dir / "products"
+
         logger.info(f"Initialized METRIC workflow")
         logger.info(f"ROI: {self.roi_path}")
         logger.info(f"Output directory: {output_dir}")
@@ -205,8 +216,10 @@ class METRICWorkflow:
         logger.info(f"Interpolation method: {self.interpolation_method}")
         logger.info(f"Extrapolation days: {self.extrapolation_days}")
         logger.info(f"Include surface: {self.include_surface}")
+        logger.info(f"Save scenes: {self.save_scenes}")
+        logger.info(f"Visualization: {self.visualization}")
         logger.info(f"Scenes directory: {self.scenes_dir}")
-        logger.info(f"ET output directory: {self.et_output_dir}")
+        logger.info(f"Staging directory: {self.staging_dir}")
     
     def run(self) -> Dict:
         """
@@ -250,8 +263,8 @@ class METRICWorkflow:
             logger.info("=" * 60)
             logger.info("STEP 2: Calculating ET for all scenes")
             logger.info("=" * 60)
-            logger.info(f"ET output directory: {self.et_output_dir}")
-            
+            logger.info(f"Staging directory: {self.staging_dir}")
+
             processed_scenes = self._calculate_et_all(scenes)
             results['scenes_processed'] = len(processed_scenes)
             results['scenes_failed'] = len(scenes) - len(processed_scenes)
@@ -281,11 +294,25 @@ class METRICWorkflow:
             logger.info("=" * 60)
             logger.info("STEP 4: Organizing products and creating metadata")
             logger.info("=" * 60)
-            
+
             organized = self._organize_products()
             results['products_organized'] = sum(len(v) for v in organized.values()) if organized else 0
             logger.info(f"STEP 4 COMPLETE: Organized {results['products_organized']} products")
-            
+
+            # Step 5: Finalize layout — promote staging products, relocate metadata,
+            # handle visualization PNGs, optionally drop scenes, clean up staging.
+            logger.info("=" * 60)
+            logger.info("STEP 5: Finalizing output layout")
+            logger.info("=" * 60)
+
+            self._finalize_layout()
+
+            # Optionally remove raw scene data
+            if not self.save_scenes:
+                logger.info("save_scenes=False: removing scenes directory")
+                import shutil
+                shutil.rmtree(self.scenes_dir, ignore_errors=True)
+
             # Summary
             logger.info("=" * 60)
             logger.info("WORKFLOW COMPLETED SUCCESSFULLY")
@@ -297,10 +324,10 @@ class METRICWorkflow:
             logger.info(f"Extrapolation dates: {results['extrapolation_dates']}")
             logger.info(f"Products organized: {results['products_organized']}")
             logger.info(f"Output directory: {self.output_dir}")
-            
+
             # Save workflow summary
             self._save_workflow_summary(results, errors=errors)
-            
+
             return results
             
         except Exception as e:
@@ -471,17 +498,18 @@ class METRICWorkflow:
                 logger.info("Initializing METRICPipeline...")
                 pipeline = METRICPipeline(config=config)
                 
-                # Output directory for this scene
-                scene_output_dir = self.et_output_dir / f"result_{scene_date.replace('-', '')}"
+                # Transient per-scene staging directory (cleaned up in _finalize_layout).
+                scene_output_dir = self.staging_dir / f"result_{scene_date.replace('-', '')}"
                 logger.info(f"Scene output directory: {scene_output_dir}")
-                
+
                 # Run pipeline
                 logger.info("Running pipeline.run()...")
                 results = pipeline.run(
                     landsat_dir=scene_dir,
                     meteo_data={},  # Pipeline will fetch weather dynamically
                     output_dir=str(scene_output_dir),
-                    roi_path=self.roi_path
+                    roi_path=self.roi_path,
+                    save_visualization=self.visualization
                 )
                 logger.info(f"Pipeline.run() completed, results: {results}")
                 
@@ -714,16 +742,16 @@ class METRICWorkflow:
         
         # Get reference raster for spatial info
         # Use first scene's ETrF file
-        first_scene = list(self.et_output_dir.glob("*/ETrF_*.tif"))[0]
-        
+        first_scene = list(self.staging_dir.glob("*/ETrF_*.tif"))[0]
+
         with rasterio.open(first_scene) as src:
             crs = src.crs
             transform = src.transform
             height = src.height
             width = src.width
-        
+
         # Save directly to ETaDaily product folder
-        eta_daily_product_dir = self.et_output_dir / "products" / "ETaDaily"
+        eta_daily_product_dir = self.staging_dir / "products" / "ETaDaily"
         eta_daily_product_dir.mkdir(parents=True, exist_ok=True)
         
         # Save each date's result
@@ -768,18 +796,59 @@ class METRICWorkflow:
         try:
             # Organize ET output products (metadata_in_product_folder=True)
             organized = organize_products(
-                output_dir=str(self.et_output_dir),
+                output_dir=str(self.staging_dir),
                 aoi_name=self.aoi_name,
                 create_metadata=True
             )
-            
+
             logger.info(f"Organized {sum(len(v) for v in organized.values())} products")
             return organized
             
         except Exception as e:
             logger.error(f"Product organization failed: {e}")
             return {}
-    
+
+    def _finalize_layout(self) -> None:
+        """
+        Promote organized products from staging to the final output/products/
+        folder, relocate scene metadata to products/metadata/, move visualization
+        PNGs to products/visualizations/, and remove the transient staging dir.
+        """
+        import shutil
+
+        staging_products = self.staging_dir / "products"
+
+        # 1. Promote products to final output/products/
+        if staging_products.exists():
+            if self.products_dir.exists():
+                shutil.rmtree(self.products_dir)
+            shutil.move(str(staging_products), str(self.products_dir))
+            logger.info(f"Promoted products -> {self.products_dir}")
+
+        # 2. Relocate scene metadata (metadata_*.json) to products/metadata/
+        #    with META_ prefix and .geojson extension.
+        metadata_dir = self.products_dir / "metadata"
+        metadata_dir.mkdir(parents=True, exist_ok=True)
+        for meta_file in self.staging_dir.rglob("metadata_*.json"):
+            new_name = "META_" + meta_file.stem[len("metadata"):] + ".geojson"
+            dest = metadata_dir / new_name
+            shutil.move(str(meta_file), str(dest))
+            logger.info(f"Relocated scene metadata: {meta_file.name} -> metadata/{new_name}")
+
+        # 3. Move visualization PNGs to products/visualizations/
+        viz_dir = self.products_dir / "visualizations"
+        for pattern in ("overview_*.png", "et_map_*.png"):
+            for png_file in self.staging_dir.rglob(pattern):
+                if not viz_dir.exists():
+                    viz_dir.mkdir(parents=True, exist_ok=True)
+                dest = viz_dir / png_file.name
+                shutil.move(str(png_file), str(dest))
+                logger.info(f"Moved visualization: {png_file.name} -> visualizations/")
+
+        # 4. Remove transient staging dir
+        shutil.rmtree(self.staging_dir, ignore_errors=True)
+        logger.info(f"Removed staging directory: {self.staging_dir}")
+
     def _organize_interpolated_products(self) -> Dict:
         """
         Organize only ETaDaily products in the interpolated directory.
@@ -904,14 +973,24 @@ def main():
         help='Comma-separated list of products to generate (e.g., "ETaDaily,ETrF,NDVI,LST"). '
              'If not specified, all products are generated.'
     )
-    
+    parser.add_argument(
+        '--save-scenes', action=argparse.BooleanOptionalAction, default=True,
+        help='Keep the scenes/ folder after processing (default: on). '
+             'Use --no-save-scenes to delete it after product organization.'
+    )
+    parser.add_argument(
+        '--visualization', action=argparse.BooleanOptionalAction, default=False,
+        help='Emit overview_<date>.png and et_map_<date>.png visualizations '
+             '(default: off). Use --visualization to enable.'
+    )
+
     args = parser.parse_args()
-    
+
     # Parse products list
     products = None
     if args.products:
         products = [p.strip() for p in args.products.split(',')]
-    
+
     # Create and run workflow
     workflow = METRICWorkflow(
         roi_path=args.roi,
@@ -924,7 +1003,9 @@ def main():
         interpolation_method=args.interpolation_method,
         extrapolation_days=args.extrapolation_days,
         include_surface=not args.no_surface,
-        products=products
+        products=products,
+        save_scenes=args.save_scenes,
+        visualization=args.visualization
     )
     
     results = workflow.run()

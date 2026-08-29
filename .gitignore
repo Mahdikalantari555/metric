@@ -6,3 +6,6 @@ in-memoria.db
 test/
 in-memoria-vectors.db/
 todo.md
+.opencode/
+!.opencode/skills/
+!.opencode/skills/**

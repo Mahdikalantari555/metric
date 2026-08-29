@@ -185,6 +185,9 @@ metric-et visualize --input output/ET_daily.tif --colormap viridis
 
 ## Usage Guide
 
+For the unified workflow CLI, flags, and output layout, see
+[WORKFLOW_USAGE.md](WORKFLOW_USAGE.md).
+
 ### CLI Commands
 
 #### Process Single Scene

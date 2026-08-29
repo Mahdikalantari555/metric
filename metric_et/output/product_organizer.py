@@ -336,8 +336,12 @@ class ProductOrganizer:
                 except Exception:
                     pass
             
-            # Write metadata file
-            meta_path = product_file.with_suffix('.json')
+            # Write metadata file into the product's metadata/ subfolder
+            # with a META_ prefix and .geojson extension.
+            product_dir = product_file.parent
+            metadata_dir = product_dir / "metadata"
+            metadata_dir.mkdir(parents=True, exist_ok=True)
+            meta_path = metadata_dir / f"META_{product_file.stem}.geojson"
             with open(meta_path, 'w', encoding='utf-8') as f:
                 json.dump(metadata, f, indent=2)
             

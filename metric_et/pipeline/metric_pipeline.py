@@ -31,7 +31,8 @@ class METRICPipeline:
     
     def run(
         self, landsat_dir: str, meteo_data: Dict,
-        output_dir: Optional[str] = None, roi_path: Optional[str] = None
+        output_dir: Optional[str] = None, roi_path: Optional[str] = None,
+        save_visualization: bool = False
     ) -> Dict[str, xr.DataArray]:
         """Run complete METRIC ETa processing pipeline."""
         import logging
@@ -45,6 +46,7 @@ class METRICPipeline:
             logger.info(f"Landsat directory: {landsat_dir}")
             logger.info(f"Output directory: {output_dir}")
             logger.info(f"ROI path: {roi_path}")
+            logger.info(f"Save visualization: {save_visualization}")
             logger.info(f"Config: {self.config}")
 
             # Step 1: Load and preprocess data
@@ -104,7 +106,7 @@ class METRICPipeline:
                 logger.info("-" * 60)
                 logger.info("Step 7: Saving results")
                 logger.info("-" * 60)
-                self.save_results(output_dir)
+                self.save_results(output_dir, save_visualization=save_visualization)
 
             logger.info("=" * 60)
             logger.info("METRICPipeline.run() - COMPLETED SUCCESSFULLY")
@@ -1438,15 +1440,18 @@ class METRICPipeline:
             "valid": self._calibration_result.valid
         }
 
-    def save_results(self, output_dir: str, output_products: Optional[list] = None) -> None:
+    def save_results(self, output_dir: str, output_products: Optional[list] = None,
+                    save_visualization: bool = False) -> None:
         """Save results to output directory with configurable output products.
-        
+
         Args:
             output_dir: Directory to save output files
             output_products: Optional list of products to write. Format:
                            [(output_name, band_name, dtype), ...]
                            Example: [('ETa_daily', 'ET_daily', 'float32'), ('ETrF', 'ETrF', 'float32')]
                            If None, uses config['output_products'] or default products.
+            save_visualization: When True, generate overview_<date>.png and
+                                et_map_<date>.png. When False, skip them.
         """
         from ..output import OutputWriter, Visualization
         import os
@@ -1539,17 +1544,20 @@ class METRICPipeline:
             else:
                 logger.warning("RGB image not saved - required bands not available")
 
-            # Create visualizations
-            viz = Visualization(output_dir=output_dir)
-            overview_filename = f"overview_{date_str}.png"
-            viz.create_summary_figure(self.data, os.path.join(output_dir, overview_filename), calibration_result=actual_calibration, anchor_result=self._anchor_result)
-            if self.data.get('ET_daily') is not None:
-                et_map_filename = f"et_map_{date_str}.png"
-                viz.plot_et_map(
-                    self.data.get('ET_daily'),
-                    self.data,
-                    output_path=os.path.join(output_dir, et_map_filename)
-                )
+            # Create visualizations (only when requested)
+            if save_visualization:
+                viz = Visualization(output_dir=output_dir)
+                overview_filename = f"overview_{date_str}.png"
+                viz.create_summary_figure(self.data, os.path.join(output_dir, overview_filename), calibration_result=actual_calibration, anchor_result=self._anchor_result)
+                if self.data.get('ET_daily') is not None:
+                    et_map_filename = f"et_map_{date_str}.png"
+                    viz.plot_et_map(
+                        self.data.get('ET_daily'),
+                        self.data,
+                        output_path=os.path.join(output_dir, et_map_filename)
+                    )
+            else:
+                logger.info("Visualization disabled: skipping overview/et_map PNGs")
 
             # Save metadata
             metadata_path = os.path.join(output_dir, "processing_metadata.json")
