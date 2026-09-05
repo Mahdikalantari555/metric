@@ -144,12 +144,13 @@ class TestCalibrationPhysicalValues:
         print(f"Test case 5 PASSED: dt_a = {result.a_coefficient:.2f} W/m²/K")
     
     def test_b_coefficient_is_negative_ta(self):
-        """Test that b coefficient equals -air_temperature (METRIC standard)."""
+        """Test that b coefficient follows METRIC physics: b = -a * (Ts_cold - Ta)."""
         calibration = DTCalibration.create()
         
         air_temp = 298.0
+        ts_cold = 300.0
         result = calibration.calibrate(
-            ts_cold=300.0,
+            ts_cold=ts_cold,
             ts_hot=325.0,
             air_temperature=air_temp,
             rn_hot=450.0,
@@ -161,10 +162,9 @@ class TestCalibrationPhysicalValues:
             g_cold=25.0
         )
         
-        # b should be approximately -air_temperature
-        expected_b = -air_temp
-        assert abs(result.b_coefficient - expected_b) < 1.0, \
-            f"b = {result.b_coefficient:.2f}, expected ~{expected_b:.2f}"
+        expected_b = -result.a_coefficient * (ts_cold - air_temp)
+        assert abs(result.b_coefficient - expected_b) < 0.1, \
+            f"b = {result.b_coefficient:.2f}, expected {expected_b:.2f} (from b = -a * (Ts_cold - Ta))"
         
         print(f"Test case 6 PASSED: b = {result.b_coefficient:.2f} K")
     
