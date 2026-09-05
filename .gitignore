@@ -10,3 +10,5 @@ todo.md
 !.opencode/skills/
 !.opencode/skills/**
 .memdb/
+examples/*.png
+.vscode/
