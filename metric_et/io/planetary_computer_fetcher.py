@@ -13,6 +13,50 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
+
+# --- NEP 50 compatibility: numpy 2.x can_cast no longer accepts Python ints/floats ---
+# stackstac calls np.can_cast(1, dtype) with Python scalars which now raises TypeError.
+# Patch globally so both stackstac.prepare and stackstac.to_dask work without pinning numpy.
+_original_can_cast = np.can_cast
+
+def _patched_can_cast(from_, to, casting="safe"):  # type: ignore
+    try:
+        return _original_can_cast(from_, to, casting=casting)
+    except TypeError as _e:
+        if "does not support Python ints" in str(_e):
+            # Map Python scalar -> corresponding numpy dtype (value-agnostic, safe-cast semantics)
+            if isinstance(from_, bool):
+                from_dtype = np.dtype(bool)
+            elif isinstance(from_, int):
+                from_dtype = np.dtype("int64")
+            elif isinstance(from_, float):
+                from_dtype = np.dtype("float64")
+            elif isinstance(from_, complex):
+                from_dtype = np.dtype("complex128")
+            else:
+                try:
+                    from_dtype = np.asarray(from_).dtype
+                except Exception:
+                    raise _e
+            return _original_can_cast(from_dtype, to, casting=casting)
+        raise
+
+np.can_cast = _patched_can_cast  # type: ignore
+
+# --- pandas 2.x compatibility: infer_datetime_format removed ---
+try:
+    import pandas as pd
+
+    _orig_to_datetime = pd.to_datetime
+
+    def _patched_to_datetime(*args, **kwargs):  # type: ignore
+        kwargs.pop("infer_datetime_format", None)
+        return _orig_to_datetime(*args, **kwargs)
+
+    pd.to_datetime = _patched_to_datetime  # type: ignore
+except Exception:
+    pass
+
 import rasterio
 from rasterio.transform import from_bounds
 import stackstac
@@ -21,7 +65,7 @@ from pystac_client import Client
 from pyproj import Transformer
 from shapely.geometry import box
 from shapely.geometry.base import BaseGeometry
-from shapely.ops import transform as shapely_transform
+from shapely.ops import transform as shapely_transform, unary_union
 from ..core.datacube import DataCube
 from .errors import (
     AuthenticationError,
@@ -701,12 +745,52 @@ class PlanetaryComputerLandsatFetcher:
         """
         from shapely.geometry import shape
         from pyproj import CRS
-        
+
         if isinstance(geometry, dict):
-            try:
-                geom = shape(geometry)
-            except Exception as e:
-                raise GeometryError(f"Invalid GeoJSON geometry: {e}") from e
+            geom_type = geometry.get("type")
+            geom_type_lower = geom_type.lower() if isinstance(geom_type, str) else None
+            # Handle GeoJSON FeatureCollection -> union of all feature geometries
+            if geom_type_lower == "featurecollection":
+                features = geometry.get("features", [])
+                if not features:
+                    raise GeometryError("FeatureCollection has no features")
+                geoms = []
+                for feat in features:
+                    if not isinstance(feat, dict):
+                        continue
+                    ftype = feat.get("type")
+                    ftype_lower = ftype.lower() if isinstance(ftype, str) else None
+                    if ftype_lower == "feature":
+                        g = feat.get("geometry")
+                        if g is None:
+                            continue
+                        try:
+                            geoms.append(shape(g))
+                        except Exception as e:
+                            raise GeometryError(f"Invalid GeoJSON geometry in Feature: {e}") from e
+                    else:
+                        # FeatureCollection containing bare geometries (non-standard but handle)
+                        try:
+                            geoms.append(shape(feat))
+                        except Exception as e:
+                            raise GeometryError(f"Invalid GeoJSON geometry in FeatureCollection: {e}") from e
+                if not geoms:
+                    raise GeometryError("FeatureCollection contains no valid geometries")
+                geom = unary_union(geoms) if len(geoms) > 1 else geoms[0]
+            elif geom_type_lower == "feature":
+                g = geometry.get("geometry")
+                if g is None:
+                    raise GeometryError("Feature has no geometry")
+                try:
+                    geom = shape(g)
+                except Exception as e:
+                    raise GeometryError(f"Invalid GeoJSON geometry: {e}") from e
+            else:
+                # Plain geometry dict (Polygon, MultiPolygon, GeometryCollection, etc.)
+                try:
+                    geom = shape(geometry)
+                except Exception as e:
+                    raise GeometryError(f"Invalid GeoJSON geometry: {e}") from e
         elif isinstance(geometry, BaseGeometry):
             geom = geometry
         else:

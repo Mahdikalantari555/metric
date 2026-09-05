@@ -180,14 +180,22 @@ class ETExtrapolator:
                 et0_data,
                 method
             )
-            
-            # Collect results
-            all_eta.append(gap_result['ETa_daily'])
+
+            # Skip empty gaps (no dates between scenes)
+            if not gap_result['dates']:
+                continue
+
+            # Collect results (skip empty arrays to keep ndim consistent)
+            if gap_result['ETa_daily'].size:
+                all_eta.append(gap_result['ETa_daily'])
             all_dates.extend(gap_result['dates'])
-            if 'etrf_interpolated' in gap_result:
-                all_etrf.append(gap_result['etrf_interpolated'])
-            if 'weights' in gap_result:
-                all_weights.append(gap_result['weights'])
+            if 'etrf_interpolated' in gap_result and gap_result['etrf_interpolated'].size:
+                # Only keep 3D ETrF (linear method); weighted returns empty (0,2) which we skip here
+                if gap_result['etrf_interpolated'].ndim == 3:
+                    all_etrf.append(gap_result['etrf_interpolated'])
+            if 'weights' in gap_result and gap_result['weights'].size:
+                if gap_result['weights'].ndim == 2:
+                    all_weights.append(gap_result['weights'])
             all_scene_pairs.append((gap['scene1'][0], gap['scene2'][0]))
             valid_gaps.append(gap)
         
@@ -263,7 +271,13 @@ class ETExtrapolator:
             while current_date < date2:
                 target_dates.append(current_date)
                 current_date += timedelta(days=1)
-            
+
+            # Skip gaps with no dates to interpolate (adjacent or duplicate scenes)
+            if not target_dates:
+                logger.debug("Skipping gap %s -> %s: no intermediate dates (days=%d)",
+                             date1.strftime('%Y-%m-%d'), date2.strftime('%Y-%m-%d'), days_between)
+                continue
+
             gaps.append({
                 'scene1': (date1, etrf1),
                 'scene2': (date2, etrf2),
@@ -308,11 +322,13 @@ class ETExtrapolator:
         
         if not target_dates:
             shape = etrf1.shape
+            # Return correctly-shaped empty arrays for both methods:
+            # ETa and ETrF are (0, H, W), weights is (0, 2) for weighted method
             return {
                 'ETa_daily': np.empty((0, *shape)),
                 'dates': [],
                 'etrf_interpolated': np.empty((0, *shape)),
-                'weights': np.empty((0, *shape))
+                'weights': np.empty((0, 2))
             }
         
         # Extract ET0 data for target dates

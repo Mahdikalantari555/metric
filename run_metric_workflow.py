@@ -119,20 +119,32 @@ class METRICWorkflow:
             except Exception as e:
                 raise ValueError(f"Failed to read ROI GeoJSON file '{self.roi_path}': {e}")
 
-            # Basic GeoJSON structure validation
+            # Basic GeoJSON structure validation - support all GeoJSON types
             if not isinstance(roi_data, dict):
                 raise ValueError("ROI GeoJSON must be a JSON object")
-            if roi_data.get("type") not in ("Feature", "FeatureCollection"):
-                raise ValueError("ROI GeoJSON must be a Feature or FeatureCollection")
+            valid_toplevel = (
+                "Feature", "FeatureCollection",
+                "Polygon", "MultiPolygon", "GeometryCollection",
+                "Point", "LineString", "MultiPoint", "MultiLineString"
+            )
+            roi_type = roi_data.get("type")
+            if roi_type not in valid_toplevel:
+                raise ValueError(
+                    f"ROI GeoJSON has unsupported top-level type '{roi_type}'. "
+                    f"Supported: {valid_toplevel}"
+                )
             
-            # Ensure there is at least one valid geometry
+            # Ensure there is at least one valid Polygon/MultiPolygon geometry
             def _has_valid_geometry(obj):
                 if isinstance(obj, dict):
-                    if obj.get("type") in ("Polygon", "MultiPolygon"):
+                    t = obj.get("type")
+                    if t in ("Polygon", "MultiPolygon"):
                         return True
-                    if obj.get("type") == "Feature":
+                    if t == "GeometryCollection":
+                        return any(_has_valid_geometry(g) for g in obj.get("geometries", []))
+                    if t == "Feature":
                         return _has_valid_geometry(obj.get("geometry", {}))
-                    if obj.get("type") == "FeatureCollection":
+                    if t == "FeatureCollection":
                         return any(_has_valid_geometry(feat) for feat in obj.get("features", []))
                 return False
 
@@ -713,9 +725,11 @@ class METRICWorkflow:
             return interp_result, extrap_result
             
         except Exception as e:
+            import traceback
             error_msg = f"Interpolation/extrapolation failed: {e}"
             logger.error(error_msg)
-            errors.append(error_msg)
+            logger.error(traceback.format_exc())
+            # errors list is owned by run(); avoid NameError here and let run() handle reporting
             return None, None
     
     def _save_interpolated_results(self, result: Dict, prefix: str) -> None:
