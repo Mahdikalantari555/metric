@@ -76,7 +76,8 @@ class METRICWorkflow:
         include_surface: bool = True,
         products: Optional[List[str]] = None,
         save_scenes: bool = True,
-        visualization: bool = False
+        visualization: bool = False,
+        min_coverage_ratio: float = 0.95
     ):
         """
         Initialize METRIC workflow.
@@ -207,6 +208,7 @@ class METRICWorkflow:
         self.products = products
         self.save_scenes = save_scenes
         self.visualization = visualization
+        self.min_coverage_ratio = min_coverage_ratio
 
         # Create output subdirectories
         self.scenes_dir = self.output_dir / "scenes"
@@ -362,7 +364,8 @@ class METRICWorkflow:
         # Initialize fetcher
         fetcher = PlanetaryComputerLandsatFetcher(
             max_cloud_cover=self.max_cloud_cover,
-            source_crs=self.source_crs
+            source_crs=self.source_crs,
+            min_coverage_ratio=self.min_coverage_ratio
         )
         
         # Load ROI (use pre-loaded GeoJSON from __init__)

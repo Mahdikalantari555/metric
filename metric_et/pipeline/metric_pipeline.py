@@ -1291,14 +1291,17 @@ class METRICPipeline:
                 et_daily_values = daily_et_result["ET_daily"]
                 valid_et_daily = et_daily_values[~np.isnan(et_daily_values)]
                 logger.info(f"ET_daily results: {len(valid_et_daily)} valid pixels")
-                logger.info(f"  Range: [{np.min(valid_et_daily):.6f}, {np.max(valid_et_daily):.6f}] mm/day")
-                logger.info(f"  Mean: {np.mean(valid_et_daily):.6f} mm/day, Std: {np.std(valid_et_daily):.6f} mm/day")
+                if len(valid_et_daily) > 0:
+                    logger.info(f"  Range: [{np.min(valid_et_daily):.6f}, {np.max(valid_et_daily):.6f}] mm/day")
+                    logger.info(f"  Mean: {np.mean(valid_et_daily):.6f} mm/day, Std: {np.std(valid_et_daily):.6f} mm/day")
 
-                # Check for unrealistic values
-                if np.max(valid_et_daily) > 15:
-                    logger.warning(f"WARNING: ET_daily maximum ({np.max(valid_et_daily):.3f} mm/day) seems high")
-                if np.min(valid_et_daily) < 0:
-                    logger.warning(f"WARNING: ET_daily minimum ({np.min(valid_et_daily):.3f} mm/day) is negative")
+                    # Check for unrealistic values
+                    if np.max(valid_et_daily) > 20:
+                        logger.warning(f"WARNING: ET_daily maximum ({np.max(valid_et_daily):.3f} mm/day) seems high")
+                    if np.min(valid_et_daily) < 0:
+                        logger.warning(f"WARNING: ET_daily minimum ({np.min(valid_et_daily):.3f} mm/day) is negative")
+                else:
+                    logger.warning("ET_daily: no valid pixels (all NaN)")
 
             # Add daily ET to data
             self.data.add("ET_daily", daily_et_result["ET_daily"])
@@ -1472,6 +1475,15 @@ class METRICPipeline:
             # Get output configuration from config or use provided
             config_output_products = self.config.get('output_products')
             products_to_use = output_products or config_output_products
+
+            # If products are plain strings, resolve to (name, band, dtype) tuples
+            if products_to_use and isinstance(products_to_use[0], str):
+                from ..output.writer import OutputWriter as _OW
+                name_lookup = {}
+                for cat in _OW.DEFAULT_PRODUCTS.values():
+                    for entry in cat:
+                        name_lookup[entry[0]] = entry
+                products_to_use = [name_lookup[p] for p in products_to_use if p in name_lookup]
             
             # Determine if surface properties should be included
             include_surface = self.config.get('include_surface_properties', True)
