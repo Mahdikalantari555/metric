@@ -140,7 +140,9 @@ class PlanetaryComputerLandsatFetcher:
         collection: str = "landsat-c2-l2",
         bands: List[str] = None,
         max_cloud_cover: float = 70.0,
-        source_crs: str = "EPSG:4326"
+        source_crs: str = "EPSG:4326",
+        cache_dir: str = None,
+        use_cache: bool = True
     ) -> None:
         """Initialize the fetcher.
         
@@ -156,6 +158,8 @@ class PlanetaryComputerLandsatFetcher:
         self.bands = bands or REQUIRED_BANDS.copy()
         self.max_cloud_cover = max_cloud_cover
         self.source_crs = source_crs
+        self.cache_dir = Path(cache_dir) if cache_dir else None
+        self.use_cache = use_cache
         
         # Validate bands
         for band in self.bands:
@@ -245,32 +249,38 @@ class PlanetaryComputerLandsatFetcher:
             scene_date = item.properties["datetime"][:10]
             path = item.properties.get('landsat:wrs_path')
             row = item.properties.get('landsat:wrs_row')
-            
+
             # Create scene directory
             scene_dir = output_path / f"landsat_{scene_date.replace('-', '')}_{path}_{row}"
             scene_dir.mkdir(parents=True, exist_ok=True)
-            
-            # Download and clip bands
-            try:
-                downloaded_files = self.download_and_clip_bands(
-                    item, roi_bbox, scene_dir, resolution, min_coverage_ratio
-                )
-            except DownloadError as e:
-                # Scene has insufficient coverage, try next scene
-                logger.warning(f"Skipping scene {item.id}: {e}")
-                # Clean up the scene directory
+
+            # Skip download if scene already exists on disk
+            existing = self._find_existing_scene(scene_dir)
+            if existing is not None:
+                downloaded_files, mtl_path = existing
+                logger.info(f"Scene {item.id} already downloaded, skipping: {scene_dir}")
+            else:
+                # Download and clip bands
                 try:
-                    for f in scene_dir.iterdir():
-                        if f.is_file():
-                            f.unlink()
-                    scene_dir.rmdir()
-                except:
-                    pass
-                continue
-            
-            # Create MTL.json
-            mtl_path = self._create_mtl_metadata(item, scene_dir)
-            
+                    downloaded_files = self.download_and_clip_bands(
+                        item, roi_bbox, scene_dir, resolution, min_coverage_ratio
+                    )
+                except DownloadError as e:
+                    # Scene has insufficient coverage, try next scene
+                    logger.warning(f"Skipping scene {item.id}: {e}")
+                    # Clean up the scene directory
+                    try:
+                        for f in scene_dir.iterdir():
+                            if f.is_file():
+                                f.unlink()
+                        scene_dir.rmdir()
+                    except Exception:
+                        pass
+                    continue
+
+                # Create MTL.json
+                mtl_path = self._create_mtl_metadata(item, scene_dir)
+
             results.append({
                 "scene_id": item.id,
                 "date": scene_date,
@@ -288,7 +298,34 @@ class PlanetaryComputerLandsatFetcher:
                 "No scenes found with sufficient valid pixel coverage. "
                 f"Tried {len(full_coverage_items)} scene(s) but all had coverage < {min_coverage_ratio*100:.0f}%"
             )
-    
+
+        return results
+
+    def _find_existing_scene(self, scene_dir: Path) -> Optional[Tuple[Dict[str, Path], Path]]:
+        """Check if a scene was already downloaded.
+
+        A scene counts as complete when its directory contains all
+        required band .tif files plus an MTL.json metadata file.
+
+        Args:
+            scene_dir: Scene output directory to inspect
+
+        Returns:
+            (band_files, mtl_path) tuple if complete, else None
+        """
+        if not scene_dir.is_dir():
+            return None
+        band_files = {}
+        for band in self.bands:
+            band_path = scene_dir / f"{band}.tif"
+            if not band_path.is_file():
+                return None
+            band_files[band] = band_path
+        mtl_candidates = list(scene_dir.glob("MTL*.json")) + list(scene_dir.glob("*.json"))
+        if not mtl_candidates:
+            return None
+        return band_files, mtl_candidates[0]
+
     def search_scenes(
         self,
         roi_geometry: Union[dict, BaseGeometry],

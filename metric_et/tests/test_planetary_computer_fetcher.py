@@ -120,31 +120,40 @@ class TestPlanetaryComputerLandsatFetcher:
         with pytest.raises(ValueError, match="Start date .* is after end date"):
             fetcher._normalize_dates((start, end))
     
+    def _make_item(self, item_id, bounds):
+        """Helper: mock STAC item with a box geometry covering bounds."""
+        minx, miny, maxx, maxy = bounds
+        item = Mock()
+        item.id = item_id
+        item.bbox = bounds
+        item.geometry = {
+            "type": "Polygon",
+            "coordinates": [[
+                [minx, miny], [maxx, miny], [maxx, maxy],
+                [minx, maxy], [minx, miny],
+            ]],
+        }
+        return item
+
     def test_filter_full_coverage(self):
         """Test full coverage filtering."""
         fetcher = PlanetaryComputerLandsatFetcher()
-        
-        # Create ROI and scene geometries
-        roi = box(48.0, 31.0, 48.5, 31.5)
-        
-        # Scene that fully covers ROI
-        scene1_bbox = [47.5, 30.5, 48.8, 31.8]
-        item1 = Mock()
-        item1.bbox = scene1_bbox
-        item1.id = "scene1"
-        
-        # Scene that partially overlaps ROI
-        scene2_bbox = [48.2, 31.2, 48.7, 31.7]
-        item2 = Mock()
-        item2.bbox = scene2_bbox
-        item2.id = "scene2"
-        
+
+        # ROI bbox (implementation takes a bbox list, not a shapely geometry)
+        roi_bbox = [48.0, 31.0, 48.5, 31.5]
+
+        # Scene that intersects ROI
+        item1 = self._make_item("scene1", [47.5, 30.5, 48.8, 31.8])
+
+        # Scene that does not intersect ROI at all
+        item2 = self._make_item("scene2", [50.0, 33.0, 50.5, 33.5])
+
         items = [item1, item2]
-        filtered = fetcher._filter_full_coverage(roi, items)
-        
+        filtered = fetcher._filter_full_coverage(roi_bbox, items)
+
         assert len(filtered) == 1
         assert filtered[0].id == "scene1"
-    
+
     def test_filter_full_coverage_empty(self):
         """Test full coverage filtering with no full coverage scenes."""
         fetcher = PlanetaryComputerLandsatFetcher()
@@ -152,44 +161,47 @@ class TestPlanetaryComputerLandsatFetcher:
         
         # Scene that only partially overlaps
         scene_bbox = [48.2, 31.2, 48.7, 31.7]
-        item = Mock()
-        item.bbox = scene_bbox
-        item.id = "scene_partial"
-        
+        item = self._make_item("scene_partial", scene_bbox)
+
         items = [item]
-        filtered = fetcher._filter_full_coverage(roi, items)
-        assert len(filtered) == 0
-    
-    def test_get_cache_path(self):
-        """Test cache path generation."""
-        fetcher = PlanetaryComputerLandsatFetcher(cache_dir="/tmp/cache")
-        asset_href = "https://example.com/band.tif"
-        band_name = "blue"
-        cache_path = fetcher._get_cache_path(asset_href, band_name)
-        
-        assert cache_path.parent == Path("/tmp/cache")
-        assert cache_path.name.startswith("blue_")
-        assert cache_path.name.endswith(".tif")
-    
-    def test_get_cache_path_no_cache(self):
-        """Test cache path when caching is disabled."""
-        fetcher = PlanetaryComputerLandsatFetcher(cache_dir=None)
-        asset_href = "https://example.com/band.tif"
-        band_name = "blue"
-        cache_path = fetcher._get_cache_path(asset_href, band_name)
-        assert cache_path is None or str(cache_path) == "None"
-    
-    def test_extract_metadata(self):
-        """Test metadata extraction from STAC item."""
+        filtered = fetcher._filter_full_coverage(list(roi.bounds), items)
+        assert len(filtered) == 1  # intersects -> kept (pixel check happens after download)
+
+    def test_filter_no_intersection(self):
+        """Scenes that miss the ROI entirely are filtered out."""
         fetcher = PlanetaryComputerLandsatFetcher()
-        
-        # Create mock STAC item
+        roi_bbox = [48.0, 31.0, 48.5, 31.5]
+        item = self._make_item("scene_far", [50.0, 33.0, 50.5, 33.5])
+        assert fetcher._filter_full_coverage(roi_bbox, [item]) == []
+
+    def test_cache_dir_default(self):
+        """Default fetcher has no cache_dir but caching enabled."""
+        fetcher = PlanetaryComputerLandsatFetcher()
+        assert fetcher.cache_dir is None
+        assert fetcher.use_cache is True
+
+    def test_cache_dir_custom(self):
+        """Custom cache_dir is stored as a Path."""
+        fetcher = PlanetaryComputerLandsatFetcher(cache_dir="/tmp/cache", use_cache=False)
+        assert fetcher.cache_dir == Path("/tmp/cache")
+        assert fetcher.use_cache is False
+    
+    def _make_landsat_item(self, item_id="LC08_L2SP_166038_20230427_20230428_02_T1"):
+        """Helper: mock Landsat STAC item."""
         item = Mock()
-        item.id = "LC08_L2SP_166038_20230427_20230428_02_T1"
+        item.id = item_id
         item.datetime = datetime(2023, 4, 27, 10, 30, 0)
-        
-        properties = {
-            'cloud_cover': 15.5,
+        item.geometry = {
+            "type": "Polygon",
+            "coordinates": [[[48.0, 31.0], [48.5, 31.0], [48.5, 31.5],
+                             [48.0, 31.5], [48.0, 31.0]]],
+        }
+        item.bbox = [48.0, 31.0, 48.5, 31.5]
+        item.collection_id = "landsat-c2-l2"
+        item.assets = {}
+        item.properties = {
+            'datetime': '2023-04-27T10:30:00Z',
+            'eo:cloud_cover': 15.5,
             'platform': 'landsat-8',
             'view:sun_elevation': 45.2,
             'view:sun_azimuth': 123.4,
@@ -197,190 +209,115 @@ class TestPlanetaryComputerLandsatFetcher:
             'landsat:wrs_row': 38,
             'landsat:correction': 'L2SP',
         }
-        item.properties = properties
-        
-        cube = DataCube()
-        fetcher._extract_metadata(cube, item)
-        
-        assert cube.metadata['scene_id'] == item.id
-        assert cube.acquisition_time == item.datetime
-        assert cube.metadata['cloud_cover'] == 15.5
-        assert cube.metadata['platform'] == 'landsat-8'
-        assert cube.metadata['sun_elevation'] == 45.2
-        assert cube.metadata['sun_azimuth'] == 123.4
-        assert cube.metadata['path'] == 166
-        assert cube.metadata['row'] == 38
-        assert cube.metadata['correction'] == 'L2SP'
-        assert cube.metadata['sensor'] == 'oli'
-    
-    def test_extract_metadata_landsat9(self):
-        """Test metadata extraction for Landsat 9."""
+        return item
+
+    def test_create_mtl_metadata(self, tmp_path):
+        """Test MTL.json creation from a STAC item."""
         fetcher = PlanetaryComputerLandsatFetcher()
-        item = Mock()
-        item.id = "LC09_L2SP_166038_20230427_20230428_02_T1"
-        item.datetime = datetime(2023, 4, 27)
-        item.properties = {
-            'platform': 'landsat-9',
-            'cloud_cover': 10.0,
-        }
-        cube = DataCube()
-        fetcher._extract_metadata(cube, item)
-        assert cube.metadata['sensor'] == 'oli'
-    
-    def test_extract_metadata_landsat7(self):
-        """Test metadata extraction for Landsat 7."""
+        item = self._make_landsat_item()
+
+        mtl_path = fetcher._create_mtl_metadata(item, tmp_path)
+
+        assert mtl_path.is_file()
+        mtl_data = json.loads(mtl_path.read_text())
+        assert mtl_data["item_id"] == item.id
+        assert mtl_data["cloud_cover"] == 15.5
+        assert mtl_data["path"] == 166
+        assert mtl_data["row"] == 38
+
+    def test_find_existing_scene_complete(self, tmp_path):
+        """A scene dir with all bands + MTL.json counts as downloaded."""
         fetcher = PlanetaryComputerLandsatFetcher()
-        item = Mock()
-        item.id = "LE07_L2SP_166038_20230427_20230428_02_T1"
-        item.datetime = datetime(2023, 4, 27)
-        item.properties = {
-            'platform': 'landsat-7',
-            'cloud_cover': 10.0,
-        }
-        cube = DataCube()
-        fetcher._extract_metadata(cube, item)
-        assert cube.metadata['sensor'] == 'etm'
+        scene_dir = tmp_path / "landsat_20230427_166_38"
+        scene_dir.mkdir()
+        for band in fetcher.bands:
+            (scene_dir / f"{band}.tif").touch()
+        (scene_dir / "MTL.json").touch()
+
+        found = fetcher._find_existing_scene(scene_dir)
+        assert found is not None
+        band_files, mtl_path = found
+        assert len(band_files) == len(fetcher.bands)
+        assert mtl_path.is_file()
+
+    def test_find_existing_scene_incomplete(self, tmp_path):
+        """A scene dir missing bands or metadata is NOT complete."""
+        fetcher = PlanetaryComputerLandsatFetcher()
+        scene_dir = tmp_path / "landsat_20230427_166_38"
+        scene_dir.mkdir()
+        (scene_dir / "blue.tif").touch()  # only one band, no MTL
+
+        assert fetcher._find_existing_scene(scene_dir) is None
+        assert fetcher._find_existing_scene(tmp_path / "does_not_exist") is None
     
     @patch('planetary_computer.sign')
-    def test_download_and_build_cube_success(self, mock_sign):
-        """Test successful download and cube building."""
-        # Mock the signed item and its assets
+    def test_download_clip_bands_no_assets(self, mock_sign, tmp_path):
+        """download_and_clip_bands raises when the item has no usable bands."""
         mock_item = Mock()
-        mock_item.id = "test_scene_001"
+        mock_item.id = "test_scene_nobands"
         mock_item.datetime = datetime(2023, 4, 27)
-        mock_item.properties = {
-            'cloud_cover': 10.0,
-            'platform': 'landsat-8',
-            'view:sun_elevation': 45.0,
-            'view:sun_azimuth': 123.0,
-            'landsat:wrs_path': 166,
-            'landsat:wrs_row': 38,
-            'landsat:correction': 'L2SP',
-        }
+        mock_item.assets = {}  # no bands at all
         mock_sign.return_value = mock_item
-        
-        # Create mock assets with COG URLs
-        mock_assets = {}
-        for band in ['blue', 'green', 'red', 'nir08', 'swir16', 'swir22', 'lwir11', 'qa_pixel']:
-            asset = Mock()
-            asset.href = f"https://example.com/{band}.tif"
-            mock_assets[band] = asset
-        mock_item.assets = mock_assets
-        
-        # Mock rasterio.open to return a simple array
-        with patch('rasterio.open') as mock_rasterio:
-            # Setup mock dataset
-            mock_ds = MagicMock()
-            mock_ds.read.return_value = np.ones((10, 10), dtype=np.float32) * 0.5
-            mock_ds.transform = (30.0, 0.0, 499980.0, 0.0, -30.0, 4200000.0)
-            mock_ds.crs = "EPSG:32639"
-            mock_ds.bounds = (499980.0, 4199010.0, 500280.0, 4199310.0)
-            mock_ds.nodata = None
-            mock_ds.__enter__ = lambda self: self
-            mock_ds.__exit__ = lambda self, *args: None
-            mock_rasterio.return_value = mock_ds
-            
-            fetcher = PlanetaryComputerLandsatFetcher()
-            roi = box(48.0, 31.0, 48.5, 31.5)
-            
-            cube = fetcher._download_and_build_cube(mock_item, roi)
-            
-            assert cube is not None
-            assert isinstance(cube, DataCube)
-            assert len(cube.bands()) == 8
-            for band in ['blue', 'green', 'red', 'nir08', 'swir16', 'swir22', 'lwir11', 'qa_pixel']:
-                assert band in cube.bands()
-            assert cube.crs is not None
-            assert cube.transform is not None
-            assert cube.extent is not None
-    
-    @patch('planetary_computer.sign')
-    def test_download_and_build_cube_missing_band(self, mock_sign):
-        """Test cube building with missing band."""
-        mock_item = Mock()
-        mock_item.id = "test_scene_missing"
-        mock_item.datetime = datetime(2023, 4, 27)
-        mock_item.properties = {
-            'cloud_cover': 10.0,
-            'platform': 'landsat-8',
-            'view:sun_elevation': 45.0,
-            'view:sun_azimuth': 123.0,
-            'landsat:wrs_path': 166,
-            'landsat:wrs_row': 38,
-            'landsat:correction': 'L2SP',
+
+        fetcher = PlanetaryComputerLandsatFetcher()
+        with pytest.raises(DownloadError, match="No required bands"):
+            fetcher.download_and_clip_bands(
+                mock_item, [48.0, 31.0, 48.5, 31.5], tmp_path, 30.0
+            )
+
+    def test_fetch_scenes_skips_existing(self, tmp_path):
+        """fetch_scenes does not re-download scenes already on disk."""
+        fetcher = PlanetaryComputerLandsatFetcher()
+        item = self._make_landsat_item()
+        item.properties['datetime'] = '2023-04-27T10:30:00Z'
+        item.properties['eo:cloud_cover'] = 15.5
+
+        roi = {
+            "type": "Polygon",
+            "coordinates": [[[48.0, 31.0], [48.5, 31.0], [48.5, 31.5],
+                             [48.0, 31.5], [48.0, 31.0]]],
         }
-        mock_sign.return_value = mock_item
-        
-        # Only provide some bands (missing lwir11)
-        mock_assets = {}
-        for band in ['blue', 'green', 'red', 'nir08', 'swir16', 'swir22', 'qa_pixel']:
-            asset = Mock()
-            asset.href = f"https://example.com/{band}.tif"
-            mock_assets[band] = asset
-        mock_item.assets = mock_assets
-        
-        with patch('rasterio.open') as mock_rasterio:
-            mock_ds = MagicMock()
-            mock_ds.read.return_value = np.ones((10, 10), dtype=np.float32) * 0.5
-            mock_ds.transform = (30.0, 0.0, 499980.0, 0.0, -30.0, 4200000.0)
-            mock_ds.crs = "EPSG:32639"
-            mock_ds.bounds = (499980.0, 4199010.0, 500280.0, 4199310.0)
-            mock_ds.nodata = None
-            mock_ds.__enter__ = lambda self: self
-            mock_ds.__exit__ = lambda self, *args: None
-            mock_rasterio.return_value = mock_ds
-            
-            fetcher = PlanetaryComputerLandsatFetcher()
-            roi = box(48.0, 31.0, 48.5, 31.5)
-            
-            with pytest.raises(PartialDataError, match="Missing critical bands"):
-                fetcher._download_and_build_cube(mock_item, roi)
-    
-    @patch('planetary_computer.sign')
-    def test_download_and_build_cube_missing_qa_only(self, mock_sign):
-        """Test cube building with only QA band missing (should succeed with warning)."""
-        mock_item = Mock()
-        mock_item.id = "test_scene_no_qa"
-        mock_item.datetime = datetime(2023, 4, 27)
-        mock_item.properties = {
-            'cloud_cover': 10.0,
-            'platform': 'landsat-8',
-            'view:sun_elevation': 45.0,
-            'view:sun_azimuth': 123.0,
-            'landsat:wrs_path': 166,
-            'landsat:wrs_row': 38,
-            'landsat:correction': 'L2SP',
+        date_range = ("2023-04-27", "2023-04-28")
+
+        # Pre-create the scene dir as if a previous run downloaded it
+        scene_dir = tmp_path / "landsat_20230427_166_38"
+        scene_dir.mkdir(parents=True)
+        for band in fetcher.bands:
+            (scene_dir / f"{band}.tif").touch()
+        (scene_dir / "MTL.json").touch()
+
+        with patch.object(fetcher, '_search_scenes_by_bbox', return_value=[item]), \
+             patch.object(fetcher, 'download_and_clip_bands') as mock_dl:
+            results = fetcher.fetch_scenes(roi, date_range, str(tmp_path))
+
+            mock_dl.assert_not_called()  # no re-download
+            assert len(results) == 1
+            assert results[0]["scene_id"] == item.id
+            assert results[0]["directory"] == str(scene_dir)
+
+    def test_fetch_scenes_downloads_missing(self, tmp_path):
+        """fetch_scenes downloads scenes that are not on disk yet."""
+        fetcher = PlanetaryComputerLandsatFetcher()
+        item = self._make_landsat_item()
+        item.properties['datetime'] = '2023-04-27T10:30:00Z'
+        item.properties['eo:cloud_cover'] = 15.5
+
+        roi = {
+            "type": "Polygon",
+            "coordinates": [[[48.0, 31.0], [48.5, 31.0], [48.5, 31.5],
+                             [48.0, 31.5], [48.0, 31.0]]],
         }
-        mock_sign.return_value = mock_item
-        
-        # All bands except qa_pixel
-        mock_assets = {}
-        for band in ['blue', 'green', 'red', 'nir08', 'swir16', 'swir22', 'lwir11']:
-            asset = Mock()
-            asset.href = f"https://example.com/{band}.tif"
-            mock_assets[band] = asset
-        mock_item.assets = mock_assets
-        
-        with patch('rasterio.open') as mock_rasterio:
-            mock_ds = MagicMock()
-            mock_ds.read.return_value = np.ones((10, 10), dtype=np.float32) * 0.5
-            mock_ds.transform = (30.0, 0.0, 499980.0, 0.0, -30.0, 4200000.0)
-            mock_ds.crs = "EPSG:32639"
-            mock_ds.bounds = (499980.0, 4199010.0, 500280.0, 4199310.0)
-            mock_ds.nodata = None
-            mock_ds.__enter__ = lambda self: self
-            mock_ds.__exit__ = lambda self, *args: None
-            mock_rasterio.return_value = mock_ds
-            
-            fetcher = PlanetaryComputerLandsatFetcher()
-            roi = box(48.0, 31.0, 48.5, 31.5)
-            
-            cube = fetcher._download_and_build_cube(mock_item, roi)
-            
-            assert cube is not None
-            # Should have 7 bands (qa_pixel missing)
-            assert len(cube.bands()) == 7
-            assert 'qa_pixel' not in cube.bands()
+        date_range = ("2023-04-27", "2023-04-28")
+        fake_files = {b: tmp_path / f"{b}.tif" for b in fetcher.bands}
+
+        with patch.object(fetcher, '_search_scenes_by_bbox', return_value=[item]), \
+             patch.object(fetcher, 'download_and_clip_bands', return_value=fake_files) as mock_dl, \
+             patch.object(fetcher, '_create_mtl_metadata', return_value=tmp_path / "MTL.json"):
+            results = fetcher.fetch_scenes(roi, date_range, str(tmp_path))
+
+            mock_dl.assert_called_once()  # downloaded because not on disk
+            assert len(results) == 1
+            assert results[0]["bands_downloaded"] == len(fetcher.bands)
     
     def test_search_scenes_no_auth(self):
         """Test search_scenes with mocked STAC client."""
@@ -426,75 +363,69 @@ class TestPlanetaryComputerLandsatFetcher:
             count = fetcher.get_scene_count(roi, date_range)
             assert count == 3
     
-    def test_fetch_scenes_no_results(self):
+    def test_fetch_scenes_no_results(self, tmp_path):
         """Test fetch_scenes with no matching scenes."""
         fetcher = PlanetaryComputerLandsatFetcher()
-        
-        with patch.object(fetcher, '_search_scenes') as mock_search:
-            mock_search.return_value = []
-            
+
+        with patch.object(fetcher, '_search_scenes_by_bbox', return_value=[]):
             roi = box(48.0, 31.0, 48.5, 31.5)
             date_range = (datetime(2023, 4, 27), datetime(2023, 4, 28))
-            
+
             with pytest.raises(NoSceneFoundError, match="No scenes found"):
-                fetcher.fetch_scenes(roi, date_range)
-    
-    def test_fetch_scenes_no_full_coverage(self):
-        """Test fetch_scenes with only partial coverage scenes."""
+                fetcher.fetch_scenes(roi, date_range, str(tmp_path))
+
+    def test_fetch_scenes_no_full_coverage(self, tmp_path):
+        """Test fetch_scenes with only non-intersecting scenes."""
         fetcher = PlanetaryComputerLandsatFetcher()
-        
-        # Create mock items that partially overlap
-        mock_item = Mock()
-        mock_item.id = "partial_scene"
-        mock_item.bbox = [48.2, 31.2, 48.7, 31.7]  # Only partial overlap
+
+        mock_item = self._make_item("far_scene", [50.0, 33.0, 50.5, 33.5])
         mock_item.datetime = datetime(2023, 4, 27)
         mock_item.properties = {'cloud_cover': 10.0}
-        
-        with patch.object(fetcher, '_search_scenes') as mock_search:
-            mock_search.return_value = [mock_item]
-            
+
+        with patch.object(fetcher, '_search_scenes_by_bbox', return_value=[mock_item]):
             roi = box(48.0, 31.0, 48.5, 31.5)
             date_range = (datetime(2023, 4, 27), datetime(2023, 4, 28))
-            
-            with pytest.raises(NoSceneFoundError, match="No scenes found with full ROI coverage") as exc_info:
-                fetcher.fetch_scenes(roi, date_range)
-            
-            assert "partial overlaps: 1" in str(exc_info.value)
-    
-    def test_fetch_scenes_sort_by_cloud_cover(self):
-        """Test fetch_scenes sorting by cloud cover."""
+
+            with pytest.raises(NoSceneFoundError, match="No scenes found with full ROI coverage"):
+                fetcher.fetch_scenes(roi, date_range, str(tmp_path))
+
+    def test_fetch_scenes_sort_by_cloud_cover(self, tmp_path):
+        """Test fetch_scenes sorting by cloud cover (dict results)."""
         fetcher = PlanetaryComputerLandsatFetcher()
-        
-        # Create mock items with different cloud covers
+
         def make_item(item_id, cloud_cover):
-            item = Mock()
-            item.id = item_id
-            item.bbox = [47.5, 30.5, 48.8, 31.8]  # Full coverage
+            item = self._make_item(item_id, [47.5, 30.5, 48.8, 31.8])
             item.datetime = datetime(2023, 4, 27)
-            item.properties = {'cloud_cover': cloud_cover}
+            item.properties = {
+                'datetime': '2023-04-27T10:30:00Z',
+                'cloud_cover': cloud_cover,
+                'landsat:wrs_path': 166,
+                'landsat:wrs_row': 38,
+            }
             return item
-        
+
         items = [
             make_item("scene_high_cc", 50.0),
             make_item("scene_low_cc", 10.0),
             make_item("scene_mid_cc", 30.0),
         ]
-        
-        with patch.object(fetcher, '_search_scenes') as mock_search:
-            mock_search.return_value = items
-            
-            with patch.object(fetcher, '_download_and_build_cube') as mock_download:
-                mock_download.return_value = DataCube()
-                
-                roi = box(48.0, 31.0, 48.5, 31.5)
-                date_range = (datetime(2023, 4, 27), datetime(2023, 4, 28))
-                
-                cubes = fetcher.fetch_scenes(roi, date_range, sort_by='cloud_cover')
-                
-                # Should be sorted by cloud cover (ascending)
-                assert len(cubes) == 3
-                # The download would be called in order, we just verify all were downloaded
-                assert mock_download.call_count == 3
+
+        with patch.object(fetcher, '_search_scenes_by_bbox', return_value=items), \
+             patch.object(fetcher, 'download_and_clip_bands',
+                          return_value={'blue': tmp_path / 'blue.tif'}), \
+             patch.object(fetcher, '_create_mtl_metadata',
+                          return_value=tmp_path / 'MTL.json'):
+            roi = box(48.0, 31.0, 48.5, 31.5)
+            date_range = (datetime(2023, 4, 27), datetime(2023, 4, 28))
+
+            results = fetcher.fetch_scenes(roi, date_range, str(tmp_path),
+                                           sort_by='cloud_cover')
+
+            assert len(results) == 3
+            # Sorted ascending by cloud cover
+            assert [r["scene_id"] for r in results] == [
+                "scene_low_cc", "scene_mid_cc", "scene_high_cc",
+            ]
 
 
 class TestErrorClasses:
