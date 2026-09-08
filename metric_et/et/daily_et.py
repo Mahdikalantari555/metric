@@ -23,13 +23,8 @@ Time Factors:
 
 Physical Constraints:
     - ET_min = 0 mm/day (no negative ET)
-    - ET_max = 12 mm/day (upper physical limit, tropical rainforest)
-
-Regional Adaptations:
-    - Midlatitude: max_et_daily = 12 mm/day, daylight_fraction = 0.7
-    - Tropical: max_et_daily = 15 mm/day, daylight_fraction = 0.8
-    - Arid: max_et_daily = 8 mm/day, daylight_fraction = 0.6
-    - Diurnal distribution: Optional time-of-day ET patterns
+    - ET_max = 30 mm/day (upper physical limit)
+    - daylight_fraction = 1.0 (no daylight reduction)
 """
 
 import numpy as np
@@ -49,8 +44,8 @@ class DailyETConfig:
     # Minimum daily ET (mm/day)
     min_et_daily: float = 0.0
     
-    # Maximum daily ET (mm/day) - fixed at 20.0
-    max_et_daily: float = 20.0
+    # Maximum daily ET (mm/day)
+    max_et_daily: float = 30.0
     
     # Time factor for ETr extrapolation (default = 24)
     time_factor: float = 24.0
@@ -60,13 +55,10 @@ class DailyETConfig:
     
     # Minimum valid ETrF
     min_etrf: float = 0.0
-    
-    # Maximum valid ETrF
-    max_etrf: float = 2.0
-    
-    # Diurnal distribution option
-    use_diurnal_distribution: bool = False
-    
+
+    # Maximum valid ETrF (no upper clamp by default)
+    max_etrf: Optional[float] = None
+
     # Time of day for Landsat overpass (hours, 0-23)
     overpass_time: float = 10.5
 
@@ -232,7 +224,8 @@ class DailyET:
             logger.info(f"  ETrF stats - Min: {np.min(valid_etrf):.6f}, Max: {np.max(valid_etrf):.6f}, "
                        f"Mean: {np.mean(valid_etrf):.6f}, Std: {np.std(valid_etrf):.6f}")
             logger.info(f"  ETrF unique values: {len(np.unique(valid_etrf))}")
-            logger.info(f"  ETrF clipped to max ({self.config.max_etrf}): {np.sum(valid_etrf >= self.config.max_etrf)} pixels")
+            if self.config.max_etrf is not None:
+                logger.info(f"  ETrF clipped to max ({self.config.max_etrf}): {np.sum(valid_etrf >= self.config.max_etrf)} pixels")
             logger.info(f"  ETrF clipped to min ({self.config.min_etrf}): {np.sum(valid_etrf <= self.config.min_etrf)} pixels")
 
         # ETr_daily statistics
@@ -380,17 +373,19 @@ class DailyET:
         etr_inst = self._to_numpy(etr_inst)
         etr_daily = self._to_numpy(etr_daily)
         
-        # Calculate ETrF from instantaneous values
+        # Calculate ETrF from instantaneous values (no upper clamp)
         etrf = np.where(
             etr_inst > 0.01,
             et_inst / etr_inst,
             0.0
         )
-        etrf = np.clip(etrf, self.config.min_etrf, self.config.max_etrf)
-        
+        etrf = np.maximum(etrf, self.config.min_etrf)
+        if self.config.max_etrf is not None:
+            etrf = np.minimum(etrf, self.config.max_etrf)
+
         # Calculate daily ET using ETrF method
         et_daily = self.calculate_daily_et(etrf, etr_daily)
-        
+
         result = {
             'ET_inst': et_inst,
             'ET_daily': et_daily,
@@ -439,14 +434,16 @@ class DailyET:
         # Estimate instantaneous ETr from daily ETr
         etr_inst = etr_daily / self.config.time_factor
         
-        # Calculate ETrF
+        # Calculate ETrF (no upper clamp)
         etrf = np.where(
             etr_inst > 0.01,
             et_inst / etr_inst,
             0.0
         )
-        etrf = np.clip(etrf, self.config.min_etrf, self.config.max_etrf)
-        
+        etrf = np.maximum(etrf, self.config.min_etrf)
+        if self.config.max_etrf is not None:
+            etrf = np.minimum(etrf, self.config.max_etrf)
+
         # Calculate daily ET
         et_daily = self.calculate_daily_et(etrf, etr_daily)
         
@@ -596,57 +593,27 @@ def create_daily_et(
     min_et_daily: float = 0.0,
     max_et_daily: float = 30.0,
     time_factor: float = 24.0,
-    daylight_fraction: float = 0.7,
-    use_diurnal_distribution: bool = False,
-    region: str = None,
+    daylight_fraction: float = 1.0,
     **kwargs
 ) -> DailyET:
     """
-    Factory function to create DailyET instance with regional adaptations.
-    
+    Factory function to create DailyET instance.
+
     Args:
         min_et_daily: Minimum daily ET (mm/day)
-        max_et_daily: Maximum daily ET (mm/day) for regional adaptation
+        max_et_daily: Maximum daily ET (mm/day)
         time_factor: Time factor for ETr extrapolation
-        daylight_fraction: Fraction of daylight hours (0-1)
-        use_diurnal_distribution: Whether to use diurnal ET distribution
-        region: Region identifier for preset configurations
+        daylight_fraction: Fraction of daylight hours (0-1), always 1.0
         **kwargs: Additional configuration parameters
-        
+
     Returns:
         Configured DailyET instance
-        
-    Examples:
-        >>> # Standard METRIC configuration
-        >>> daily_et = create_daily_et()
-        
-        >>> # Tropical region with higher ET and daylight fraction
-        >>> daily_et = create_daily_et(max_et_daily=15.0, daylight_fraction=0.8)
-        
-        >>> # Arid region with conservative bounds
-        >>> daily_et = create_daily_et(max_et_daily=8.0, daylight_fraction=0.6)
-        
-        >>> # Use diurnal distribution
-        >>> daily_et = create_daily_et(use_diurnal_distribution=True)
     """
-    # Regional presets - FIX: daylight_fraction = 1.0 to avoid ET reduction
-    region_presets = {
-        'tropical': {'max_et_daily': 15.0, 'daylight_fraction': 1.0},
-        'arid': {'max_et_daily': 8.0, 'daylight_fraction': 1.0},
-        'temperate': {'max_et_daily': 30.0, 'daylight_fraction': 1.0},
-        'mediterranean': {'max_et_daily': 10.0, 'daylight_fraction': 1.0}
-    }
-    
-    # Apply regional presets
-    if region and region in region_presets:
-        kwargs.update(region_presets[region])
-    
     config = DailyETConfig(
         min_et_daily=min_et_daily,
         max_et_daily=max_et_daily,
         time_factor=time_factor,
         daylight_fraction=daylight_fraction,
-        use_diurnal_distribution=use_diurnal_distribution,
         **kwargs
     )
     return DailyET(config)

@@ -20,22 +20,15 @@ Where:
     - ETr = ET0 × 1.15 (alfalfa reference is 15% higher than grass)
 
 Physical Bounds:
-    - 0.0 ≤ ETrF ≤ 2.0 (physical bounds)
+    - ETrF >= 0.0 (no upper clamp by default)
     - ETrF = 1.0: ET equals reference ET (well-watered)
-    - ETrF > 1.0: ET exceeds reference (overnight ET, advection)
-    - ETrF < 1.0: ET below reference (water stress)
+    - ETrF > 1.0: ET exceeds reference (advection, e.g. irrigated areas)
 
 Spatial Patterns:
     - Wet/cold pixels: ETrF ≈ 1.0-1.2
     - Dry/hot pixels: ETrF ≈ 0.0-0.2
     - Water bodies: ETrF ≈ 1.0-1.1
     - Urban/built-up: ETrF ≈ 0.1-0.3
-
-Regional Adaptations:
-    - Midlatitude regions: max_et_rate = 1.5 mm/hr
-    - Tropical regions: max_et_rate = 2.0 mm/hr (high insolation)
-    - Arid regions: min_etrf = 0.0, max_etrf = 1.0
-    - Irrigated regions: max_etrf = 2.0 (METRIC-compliant)
 """
 
 import numpy as np
@@ -58,28 +51,20 @@ class InstantaneousETConfig:
     # Minimum ETrF (reference ET fraction)
     min_etrf: float = 0.0
 
-    # Maximum ETrF (reference ET fraction) - METRIC-compliant upper limit
-    max_etrf: float = 2.0
-    
+    # Maximum ETrF (no upper clamp by default)
+    max_etrf: Optional[float] = None
+
     # Minimum ET rate (mm/hr)
     min_et_rate: float = 0.0
-    
-    # Maximum ET rate (mm/hr) - FIX: Increased to 2.5 for arid/Iran regions
-    # Midlatitude: 2.0 mm/hr, Tropical: 2.5 mm/hr, Arid/Iran: 2.5 mm/hr
+
+    # Maximum ET rate (mm/hr)
     max_et_rate: float = 2.5
-    
+
     # Factor to convert ET0 to ETr (alfalfa reference)
     etr_factor: float = 1.15
-    
+
     # Temperature-dependent lambda calculation
     use_temperature_lambda: bool = False
-    
-    # Region-specific ET rate limits
-    region_max_et_rate: float = 1.5
-    
-    # Region-specific ETrF limits
-    region_min_etrf: float = 0.0
-    region_max_etrf: float = 2.0
 
 
 class InstantaneousET:
@@ -112,14 +97,6 @@ class InstantaneousET:
         """
         self.config = config or InstantaneousETConfig()
         self.latent_heat = self.config.latent_heat_vaporization
-        
-        # Set regional bounds if specified
-        if self.config.region_max_et_rate != self.config.max_et_rate:
-            self.config.max_et_rate = self.config.region_max_et_rate
-        if self.config.region_min_etrf != self.config.min_etrf:
-            self.config.min_etrf = self.config.region_min_etrf
-        if self.config.region_max_etrf != self.config.max_etrf:
-            self.config.max_etrf = self.config.region_max_etrf
 
     def _to_numpy(self, arr):
         """Convert array to numpy if it's xarray DataArray."""
@@ -214,11 +191,12 @@ class InstantaneousET:
                        f"Mean: {np.mean(valid_raw):.6f}, Std: {np.std(valid_raw):.6f}")
 
         # Clipping statistics
-        clipped_high = np.sum(etrf_raw > self.config.max_etrf)
         clipped_low = np.sum(etrf_raw < self.config.min_etrf)
         total_pixels = etrf_raw.size
-        if clipped_high > 0:
-            logger.info(f"ETrF clipping: {clipped_high}/{total_pixels} pixels clipped to max {self.config.max_etrf}")
+        if self.config.max_etrf is not None:
+            clipped_high = np.sum(etrf_raw > self.config.max_etrf)
+            if clipped_high > 0:
+                logger.info(f"ETrF clipping: {clipped_high}/{total_pixels} pixels clipped to max {self.config.max_etrf}")
         if clipped_low > 0:
             logger.info(f"ETrF clipping: {clipped_low}/{total_pixels} pixels clipped to min {self.config.min_etrf}")
 
@@ -262,12 +240,10 @@ class InstantaneousET:
             0.0
         )
         
-        # Apply physical bounds
-        etrf_clipped = np.clip(
-            etrf,
-            self.config.min_etrf,
-            self.config.max_etrf
-        )
+        # Apply lower bound only (no upper clamp by default)
+        etrf_clipped = np.maximum(etrf, self.config.min_etrf)
+        if self.config.max_etrf is not None:
+            etrf_clipped = np.minimum(etrf_clipped, self.config.max_etrf)
 
         # Enhanced logging for QA/QC
         self._log_etrf_statistics(etrf, etrf_clipped)
@@ -463,51 +439,24 @@ class InstantaneousET:
 
 def create_instantaneous_et(
     min_etrf: float = 0.0,
-    max_etrf: float = 2.0,
-    max_et_rate: float = 2.5,  # FIX: Increased default
+    max_etrf: Optional[float] = None,
+    max_et_rate: float = 2.5,
     use_temperature_lambda: bool = False,
-    region: str = None,
     **kwargs
 ) -> InstantaneousET:
     """
-    Factory function to create InstantaneousET instance with regional adaptations.
-    
+    Factory function to create InstantaneousET instance.
+
     Args:
         min_etrf: Minimum reference ET fraction (default: 0.0)
-        max_etrf: Maximum reference ET fraction (default: 2.0, METRIC-compliant)
-        max_et_rate: Maximum ET rate (mm/hr) - FIX: default 2.5 for arid regions
+        max_etrf: Maximum reference ET fraction (default: None, no upper clamp)
+        max_et_rate: Maximum ET rate (mm/hr)
         use_temperature_lambda: Whether to always use temperature-dependent lambda
-        region: Region identifier for preset configurations
         **kwargs: Additional configuration parameters
-        
+
     Returns:
         Configured InstantaneousET instance
-        
-    Examples:
-        >>> # Standard METRIC configuration
-        >>> et_calc = create_instantaneous_et()
-        
-        >>> # Tropical region with higher ET rates
-        >>> et_calc = create_instantaneous_et(max_et_rate=2.5)
-        
-        >>> # Arid region with conservative bounds
-        >>> et_calc = create_instantaneous_et(max_etrf=1.0, min_etrf=0.0)
-        
-        >>> # Always use temperature-dependent lambda
-        >>> et_calc = create_instantaneous_et(use_temperature_lambda=True)
     """
-    # Regional presets - FIX: Increased max_et_rate for all regions
-    region_presets = {
-        'tropical': {'max_et_rate': 2.5, 'max_etrf': 2.0},
-        'arid': {'max_et_rate': 2.5, 'max_etrf': 1.5, 'min_etrf': 0.0},  # FIX: Increased
-        'temperate': {'max_et_rate': 2.5, 'max_etrf': 2.0},  # FIX: Increased
-        'irrigated': {'max_et_rate': 2.5, 'max_etrf': 2.0}  # FIX: Increased
-    }
-    
-    # Apply regional presets
-    if region and region in region_presets:
-        kwargs.update(region_presets[region])
-    
     config = InstantaneousETConfig(
         min_etrf=min_etrf,
         max_etrf=max_etrf,
