@@ -355,8 +355,7 @@ class OutputWriter:
         ],
         'quality': [
             ('ETqualityClass', 'ET_quality_class', 'uint8'),
-            ('ETaClassified', 'ETa_class', 'uint8'),
-            ('CWSI', 'CWSI', 'float32')
+            ('ETaClassified', 'ETa_class', 'uint8')
         ],
         'surface': [
             ('NDVI', 'ndvi', 'float32'),
@@ -367,6 +366,9 @@ class OutputWriter:
             ('FVC', 'fvc', 'float32'),
             ('SAVI', 'savi', 'float32'),
             ('LST', 'lst', 'float32'),
+            ('CWSI_ET', 'CWSI_ET', 'float32'),
+            ('CWSI_LST', 'cwsi_lst', 'float32'),
+            ('TVDI', 'tvdi', 'float32'),
             ('RGB', 'red', 'uint8'),  # RGB is created separately via write_rgb_image
         ]
     }
@@ -751,7 +753,9 @@ class ProductMetadataWriter:
     """Helper class for writing product-specific metadata GeoJSON files."""
     
     PRODUCT_CONFIG = {
-        'CWSI': {'theoretical_range': (0, 1), 'product_key': 'cwsi'},
+        'CWSI_ET': {'theoretical_range': (0, 1), 'product_key': 'cwsi_et'},
+        'CWSI_LST': {'theoretical_range': (0, 1), 'product_key': 'cwsi_lst'},
+        'TVDI': {'theoretical_range': (0, 1), 'product_key': 'tvdi'},
         'ETaDaily': {'theoretical_range': (0, 10), 'product_key': 'eta_daily'},
         'ETinst': {'theoretical_range': (0, 1), 'product_key': 'et_inst'},
         'ETrF': {'theoretical_range': (0, 1.5), 'product_key': 'etrf'},
@@ -873,8 +877,8 @@ class ProductMetadataWriter:
         return self.output_dir / filename
     
     def write_cwsi_metadata(self, data: np.ndarray, cube: DataCube, date: str, masked_pixels_count: int = 0, cloud_cover_percent: Optional[float] = None) -> str:
-        path = self._make_geojson_path('CWSI', cube, date)
-        write_product_metadata_geojson(str(path), product_name='CWSI', data=data, cube=cube, aoi_id=self.aoi_name, masked_pixels_count=masked_pixels_count, cloud_cover_percent=cloud_cover_percent, theoretical_range=self.PRODUCT_CONFIG['CWSI']['theoretical_range'])
+        path = self._make_geojson_path('CWSI_ET', cube, date)
+        write_product_metadata_geojson(str(path), product_name='CWSI_ET', data=data, cube=cube, aoi_id=self.aoi_name, masked_pixels_count=masked_pixels_count, cloud_cover_percent=cloud_cover_percent, theoretical_range=self.PRODUCT_CONFIG['CWSI_ET']['theoretical_range'])
         return str(path)
     
     def write_eta_daily_metadata(self, data: np.ndarray, cube: DataCube, date: str, masked_pixels_count: int = 0, cloud_cover_percent: Optional[float] = None) -> str:

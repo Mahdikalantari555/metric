@@ -739,6 +739,17 @@ class METRICPipeline:
             lst_calc.compute(self.data)
             logger.info("LST calculation completed")
 
+            # Calculate stress indices (CWSI_LST, TVDI) if ndvi and lst available
+            try:
+                from ..surface.indices import CWSILSTCalculator, TVDICalculator
+                if "ndvi" in self.data.bands() and "lst" in self.data.bands():
+                    CWSILSTCalculator().compute(self.data)
+                    logger.info("CWSI_LST calculation completed")
+                    TVDICalculator().compute(self.data)
+                    logger.info("TVDI calculation completed")
+            except Exception as e:
+                logger.warning(f"Stress indices calculation skipped: {e}")
+
             # Calculate roughness parameters
             roughness_calc = RoughnessCalculator()
             roughness_calc.compute(self.data)
@@ -1348,9 +1359,9 @@ class METRICPipeline:
                 
                 logger.info("ETa classification layer created: 1=0-3, 2=3-6, 3=6-9, 4=9-12, 5=12-15, 6=15-20, 7=20+")
             
-            logger.info("=== CWSI CALCULATION ===")
-            
-            # Calculate CWSI = 1 - (ETa / ET0)
+            logger.info("=== CWSI_ET CALCULATION ===")
+
+            # Calculate CWSI_ET = 1 - (ETa / ET0)
             et_daily = self.data.get("ET_daily")
             et0_daily = self.data.get("et0_fao_evapotranspiration")
             
@@ -1364,7 +1375,7 @@ class METRICPipeline:
                     # Set invalid values (NaN, inf) to NaN
                     cwsi = np.where(np.isfinite(cwsi), cwsi, np.nan)
                 
-                self.data.add("CWSI", cwsi)
+                self.data.add("CWSI_ET", cwsi)
                 
                 # Log statistics
                 valid_cwsi = cwsi[~np.isnan(cwsi)]
@@ -1410,7 +1421,7 @@ class METRICPipeline:
                 results[key] = self.data.get(key)
 
         # ET results
-        et_keys = ['ET_inst', 'ET_daily', 'ETrF', 'ET_quality_class', 'ET_confidence', 'CWSI', 'ETa_class']
+        et_keys = ['ET_inst', 'ET_daily', 'ETrF', 'ET_quality_class', 'ET_confidence', 'CWSI_ET', 'ETa_class']
         for key in et_keys:
             if key in self.data.bands():
                 results[key] = self.data.get(key)

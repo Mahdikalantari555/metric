@@ -25,7 +25,7 @@ The DataCube SHALL use the following band names (matching
 Derived bands SHALL use snake_case:
 `ndvi`, `evi`, `lai`, `savi`, `fvc`, `albedo`, `emissivity`,
 `lst`, `z0m`, `Rs_down`, `R_l_down`, `R_ns`, `R_nl`, `R_n`, `H`, `G`, `LE`,
-`ET_inst`, `ETrF`, `ET_daily`.
+`ET_inst`, `ETrF`, `ET_daily`, `CWSI_ET`, `cwsi_lst`, `tvdi`.
 
 #### Scenario: Surface properties read by name
 - **WHEN** `VegetationIndices.compute()` runs

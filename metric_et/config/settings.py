@@ -280,8 +280,7 @@ OUTPUT_PRODUCTS = {
     # Quality layer products
     "quality": [
         ("ET_quality_class", "ET_quality_class", "uint8"),
-        ("ETa_classified", "ETa_class", "uint8"),
-        ("CWSI", "CWSI", "float32")
+        ("ETa_classified", "ETa_class", "uint8")
     ],
     # Surface property products
     "surface": [
@@ -291,7 +290,10 @@ OUTPUT_PRODUCTS = {
         ("LAI", "lai", "float32"),
         ("Emissivity", "emissivity", "float32"),
         ("FVC", "fvc", "float32"),
-        ("SAVI", "savi", "float32")
+        ("SAVI", "savi", "float32"),
+        ("CWSI_ET", "CWSI_ET", "float32"),
+        ("CWSI_LST", "cwsi_lst", "float32"),
+        ("TVDI", "tvdi", "float32")
     ],
     # Radiation products
     "radiation": [
@@ -378,7 +380,7 @@ OUTPUT_PRESETS = {
         ("ETrF", "ETrF", "float32"),
         ("ET_quality_class", "ET_quality_class", "uint8"),
         ("ETa_classified", "ETa_class", "uint8"),
-        ("CWSI", "CWSI", "float32")
+        ("CWSI_ET", "CWSI_ET", "float32")
     ],
     
     # Research: All products including surface and radiation
