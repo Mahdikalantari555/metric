@@ -6,5 +6,5 @@
 - [x] Rename CWSI -> CWSI_ET, move to surface group (writer/config/organizer)
 - [x] Add CWSI_LST/TVDI to surface group
 - [x] Update `datacube-contract/spec.md` derived-band list
-- [ ] Add unit tests in `metric_et/tests/test_surface.py`
-- [ ] Run `conda run -n geospatial python -m pytest metric_et/tests/ -v`
+- [x] Add unit tests in `metric_et/tests/test_surface.py`
+- [x] Run `conda run -n geospatial python -m pytest metric_et/tests/ -v`

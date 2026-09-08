@@ -131,5 +131,134 @@ class TestTemperatureValidation:
         assert is_valid is False
 
 
+class TestCWSILST:
+    """Test CWSI_LST index."""
+
+    def _make_cube(self, size=30, seed=0):
+        import xarray as xr
+        from metric_et.core.datacube import DataCube
+        np.random.seed(seed)
+        ndvi = np.random.uniform(0.2, 0.9, (size, size))
+        lst = 300 - 10 * ndvi + np.random.randn(size, size) * 2
+        cube = DataCube()
+        cube.add("ndvi", xr.DataArray(ndvi, dims=["y", "x"]))
+        cube.add("lst", xr.DataArray(lst, dims=["y", "x"]))
+        return cube, ndvi, lst
+
+    def test_cwsi_lst_basic(self):
+        from metric_et.surface.indices import CWSILSTCalculator
+        cube, _, _ = self._make_cube()
+        calc = CWSILSTCalculator()
+        result = calc.compute_cwsi_lst(cube.get("lst"), cube.get("ndvi"))
+        assert result.name == "cwsi_lst"
+        assert result.shape == (30, 30)
+        vals = result.values[np.isfinite(result.values)]
+        assert vals.size > 0
+        assert np.all(vals >= 0) and np.all(vals <= 1)
+
+    def test_cwsi_lst_via_cube(self):
+        from metric_et.surface.indices import CWSILSTCalculator
+        cube, _, _ = self._make_cube()
+        CWSILSTCalculator().compute(cube)
+        assert "cwsi_lst" in cube.bands()
+
+    def test_cwsi_lst_missing_band(self):
+        import xarray as xr
+        from metric_et.core.datacube import DataCube
+        from metric_et.surface.indices import CWSILSTCalculator
+        cube = DataCube()
+        cube.add("ndvi", xr.DataArray(np.ones((5, 5)), dims=["y", "x"]))
+        with pytest.raises(ValueError, match="lst"):
+            CWSILSTCalculator().compute(cube)
+
+    def test_cwsi_lst_clip_false(self):
+        import xarray as xr
+        from metric_et.core.datacube import DataCube
+        from metric_et.surface.indices import CWSILSTCalculator
+        np.random.seed(1)
+        ndvi = np.random.uniform(0.2, 0.9, (20, 20))
+        lst = 300 - 10 * ndvi + np.random.randn(20, 20) * 2
+        # force a few extreme pixels to test clipping
+        lst[0, 0] = 350
+        lst[1, 1] = 250
+        cube = DataCube()
+        cube.add("ndvi", xr.DataArray(ndvi, dims=["y", "x"]))
+        cube.add("lst", xr.DataArray(lst, dims=["y", "x"]))
+        unclipped = CWSILSTCalculator(clip=False).compute_cwsi_lst(cube.get("lst"), cube.get("ndvi"))
+        clipped = CWSILSTCalculator(clip=True).compute_cwsi_lst(cube.get("lst"), cube.get("ndvi"))
+        # clipped stays in [0, 1]
+        cvals = clipped.values[np.isfinite(clipped.values)]
+        assert np.min(cvals) >= 0
+        assert np.max(cvals) <= 1
+        # unclipped has some values outside [0,1] due to extremes
+        uvals = unclipped.values[np.isfinite(unclipped.values)]
+        assert np.any((uvals < 0) | (uvals > 1))
+
+    def test_cwsi_lst_not_enough_bins(self):
+        import xarray as xr
+        from metric_et.core.datacube import DataCube
+        from metric_et.surface.indices import CWSILSTCalculator
+        # ndvi single value -> only 1 bin
+        cube = DataCube()
+        cube.add("ndvi", xr.DataArray(np.full((5, 5), 0.25), dims=["y", "x"]))
+        cube.add("lst", xr.DataArray(np.full((5, 5), 300.0), dims=["y", "x"]))
+        with pytest.raises(ValueError, match="Not enough valid NDVI bins"):
+            CWSILSTCalculator().compute(cube)
+
+
+class TestTVDI:
+    """Test TVDI index."""
+
+    def _make_cube(self, size=30, seed=0):
+        import xarray as xr
+        from metric_et.core.datacube import DataCube
+        np.random.seed(seed)
+        ndvi = np.random.uniform(0.2, 0.9, (size, size))
+        lst = 305 - 8 * ndvi + np.random.randn(size, size) * 2
+        cube = DataCube()
+        cube.add("ndvi", xr.DataArray(ndvi, dims=["y", "x"]))
+        cube.add("lst", xr.DataArray(lst, dims=["y", "x"]))
+        return cube
+
+    def test_tvdi_basic(self):
+        from metric_et.surface.indices import TVDICalculator
+        cube = self._make_cube()
+        calc = TVDICalculator()
+        result = calc.compute_tvdi(cube.get("lst"), cube.get("ndvi"))
+        assert result.name == "tvdi"
+        assert result.shape == (30, 30)
+        vals = result.values[np.isfinite(result.values)]
+        assert vals.size > 0
+        assert np.all(vals >= 0) and np.all(vals <= 1)
+        assert "dry_edge_a" in result.attrs
+        assert "dry_edge_b" in result.attrs
+        assert "lst_min" in result.attrs
+
+    def test_tvdi_via_cube(self):
+        from metric_et.surface.indices import TVDICalculator
+        cube = self._make_cube()
+        TVDICalculator().compute(cube)
+        assert "tvdi" in cube.bands()
+
+    def test_tvdi_missing_band(self):
+        import xarray as xr
+        from metric_et.core.datacube import DataCube
+        from metric_et.surface.indices import TVDICalculator
+        cube = DataCube()
+        cube.add("lst", xr.DataArray(np.ones((5, 5)), dims=["y", "x"]))
+        with pytest.raises(ValueError, match="ndvi"):
+            TVDICalculator().compute(cube)
+
+    def test_tvdi_not_enough_bins(self):
+        import xarray as xr
+        from metric_et.core.datacube import DataCube
+        from metric_et.surface.indices import TVDICalculator
+        cube = DataCube()
+        cube.add("ndvi", xr.DataArray(np.full((5, 5), 0.25), dims=["y", "x"]))
+        cube.add("lst", xr.DataArray(np.full((5, 5), 300.0), dims=["y", "x"]))
+        with pytest.raises(ValueError, match="Not enough valid NDVI bins"):
+            TVDICalculator().compute(cube)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
