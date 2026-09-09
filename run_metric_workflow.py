@@ -14,6 +14,7 @@ The workflow follows the final version described in the todo:
 """
 
 import os
+import shutil
 import sys
 import json
 import logging
@@ -68,7 +69,7 @@ class METRICWorkflow:
         output_dir: str,
         start_date: str,
         end_date: str,
-        aoi_name: str = "AOI",
+        aoi_name: str = None,
         max_cloud_cover: float = 50.0,
         source_crs: str = "EPSG:4326",
         interpolation_method: str = "weighted",
@@ -100,6 +101,8 @@ class METRICWorkflow:
                            Default False.
         """
         self.roi_path = roi_path
+        # Derive AOI name from the ROI file basename (e.g. "test/Extent.geojson" -> "Extent")
+        self.aoi_name = aoi_name or os.path.splitext(os.path.basename(roi_path))[0]
         self.output_dir = Path(output_dir).resolve()
         # Create output directory early to store temporary files if needed
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -365,7 +368,6 @@ class METRICWorkflow:
         fetcher = PlanetaryComputerLandsatFetcher(
             max_cloud_cover=self.max_cloud_cover,
             source_crs=self.source_crs,
-            min_coverage_ratio=self.min_coverage_ratio
         )
         
         # Load ROI (use pre-loaded GeoJSON from __init__)
@@ -440,13 +442,16 @@ class METRICWorkflow:
             scene_dir.mkdir(parents=True, exist_ok=True)
             
             try:
-                # Download and clip bands
-                downloaded_files = fetcher.download_and_clip_bands(
-                    item, roi_bbox, scene_dir, 30.0
-                )
-                
-                # Create MTL metadata
-                mtl_path = fetcher._create_mtl_metadata(item, scene_dir)
+                # Skip download if all required bands + MTL.json already exist
+                existing = fetcher._find_existing_scene(scene_dir)
+                if existing is not None:
+                    downloaded_files, mtl_path = existing
+                    logger.info(f"Scene {item.id} already downloaded, skipping: {scene_dir}")
+                else:
+                    downloaded_files = fetcher.download_and_clip_bands(
+                        item, roi_bbox, scene_dir, 30.0, self.min_coverage_ratio
+                    )
+                    mtl_path = fetcher._create_mtl_metadata(item, scene_dir)
                 
                 scenes.append({
                     "scene_id": item.id,
@@ -459,10 +464,13 @@ class METRICWorkflow:
                     "mtl_file": str(mtl_path),
                     "band_files": downloaded_files
                 })
-                logger.info(f"Downloaded scene: {item.id} for {scene_date}")
+                logger.info(f"Scene ready: {item.id} for {scene_date}")
                 
             except Exception as e:
                 logger.warning(f"Failed to download scene {item.id}: {e}")
+                if scene_dir.exists():
+                    shutil.rmtree(scene_dir, ignore_errors=True)
+                    logger.info(f"Removed incomplete scene directory: {scene_dir}")
                 continue
         
         logger.info(f"Successfully fetched {len(scenes)} scene(s)")

@@ -226,7 +226,7 @@ class METRICPipeline:
         logger.info(f"Landsat cube loaded with bands: {landsat_cube.bands()}")
 
         # Load ROI geometry for later use in final clipping (not for initial data loading)
-        roi_path = roi_path or self.roi_path or "amirkabir.geojson"
+        roi_path = roi_path or self.roi_path
         logger.info(f"Loading ROI geometry from: {roi_path}")
         import geopandas as gpd
         roi_gdf = gpd.read_file(roi_path)
@@ -401,7 +401,7 @@ class METRICPipeline:
             roi_clip_path = config['roi_path']
         else:
             # Try to use a default ROI file if available
-            roi_clip_path = self.roi_path or "amirkabir.geojson"
+            roi_clip_path = self.roi_path or config.get('roi_path')
         
         # Load ROI for clipping
         try:
@@ -1500,12 +1500,12 @@ class METRICPipeline:
             include_surface = self.config.get('include_surface_properties', True)
             
             # Get AOI name from config or ROI path
-            aoi_name = self.config.get('aoi_name', 'AOI')
-            if aoi_name == 'AOI':
-                # Try to extract AOI name from ROI path
-                roi_path = self.roi_path or "amirkabir.geojson"
+            aoi_name = self.config.get('aoi_name')
+            if not aoi_name:
+                roi_path = self.roi_path or self.config.get('roi_path')
                 if roi_path:
                     aoi_name = os.path.splitext(os.path.basename(roi_path))[0]
+            aoi_name = aoi_name or 'AOI'
             
             # Use OutputWriter to save products
             writer = OutputWriter(

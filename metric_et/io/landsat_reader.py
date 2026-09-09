@@ -178,7 +178,9 @@ class LandsatReader:
                 cube.metadata['sensor'] = 'unknown'
         
         # Extract processing level/correction from landsat:correction (e.g., 'L2SP')
-        cube.metadata['correction'] = mtl_data.get('landsat_correction', mtl_data.get('correction', 'L2'))
+        correction = mtl_data.get('landsat_correction', mtl_data.get('correction', 'L2'))
+        cube.metadata['correction'] = correction
+        cube.metadata['processing_level'] = correction or 'L2'
         
         # Extract scene_id - always set from LANDSAT_PRODUCT_ID or item_id as fallback
         scene_id = mtl_data.get('LANDSAT_PRODUCT_ID') or mtl_data.get('item_id', 'unknown')
@@ -208,6 +210,8 @@ class LandsatReader:
             cube.crs = src.crs
             cube.transform = src.transform
             cube.extent = src.bounds
+            if 'resolution' not in cube.metadata:
+                cube.metadata['resolution'] = src.res[0]
         
         return cube
     

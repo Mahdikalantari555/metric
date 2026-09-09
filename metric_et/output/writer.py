@@ -427,16 +427,23 @@ class OutputWriter:
         sensor = metadata.get('sensor', 'unknown')
         
         # Get processing level (e.g., 'L2A', 'L1C', 'L1GT')
-        level = metadata.get('processing_level', 'unknown')
+        # LandsatReader maps landsat_correction -> metadata['correction']; also check processing_level
+        level = metadata.get('processing_level') or metadata.get('correction', 'unknown')
         
         # Get resolution (e.g., '10', '20', '30')
         resolution = metadata.get('resolution', 'unknown')
         
-        # Get scene_id
+        # Get scene_id (Landsat: landsat:scene_id; fallback to path_row as SCENEID)
         scene_id_raw = metadata.get('scene_id', 'unknown')
-        
-        # Extract scene ID (numeric part like '454' from Sentinel scene IDs)
-        sceneid = self._extract_sceneid(scene_id_raw)
+        path = metadata.get('path')
+        row = metadata.get('row')
+        if path is not None or row is not None:
+            path_str = str(path).zfill(3) if path is not None else '000'
+            row_str = str(row).zfill(3) if row is not None else '000'
+            sceneid = f"{path_str}{row_str}"
+        else:
+            # Extract scene ID (numeric part like '454' from Sentinel scene IDs)
+            sceneid = self._extract_sceneid(scene_id_raw)
         
         # Get date from cube.acquisition_time (most reliable)
         date_clean = 'unknown'
@@ -462,7 +469,7 @@ class OutputWriter:
         logger.debug("_make_filename: date_clean='%s'", date_clean)
         
         aoi = self._aoi_name
-        filename = f"{product}_{platform}_{sensor}_{level}_{resolution}_{sceneid}_{date_clean}_{aoi}.{extension}"
+        filename = f"{product}_{platform}_{level}_{sceneid}_{date_clean}_{aoi}.{extension}"
         
         logger.debug("_make_filename: Generated '%s'", filename)
         
@@ -855,14 +862,8 @@ class ProductMetadataWriter:
         platform_raw = metadata.get('platform', 'unknown')
         platform = self._extract_platform(platform_raw)
         
-        # Get sensor
-        sensor = metadata.get('sensor', 'unknown')
-        
         # Get processing level
         level = metadata.get('processing_level', 'unknown')
-        
-        # Get resolution
-        resolution = metadata.get('resolution', 'unknown')
         
         # Get scene ID
         scene_id_raw = metadata.get('scene_id', 'unknown')
@@ -873,7 +874,7 @@ class ProductMetadataWriter:
         if len(date) == 8 and '-' not in date:
             date_clean = f"{date[0:4]}-{date[4:6]}-{date[6:8]}"
         
-        filename = f"META_{product}_{platform}_{sensor}_{level}_{resolution}_{sceneid}_{date_clean}_{self.aoi_name}.geojson"
+        filename = f"META_{product}_{platform}_{level}_{sceneid}_{date_clean}_{self.aoi_name}.geojson"
         return self.output_dir / filename
     
     def write_cwsi_metadata(self, data: np.ndarray, cube: DataCube, date: str, masked_pixels_count: int = 0, cloud_cover_percent: Optional[float] = None) -> str:

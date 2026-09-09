@@ -41,22 +41,28 @@ PLAIN_PRODUCT_PATTERNS = {
     'NDWI': r'^NDWI\.tif$',
 }
 
+# METRIC naming convention:
+#   <PRODUCT>_<PLATFORM>_<SENSOR>_<LEVEL>_<SCENEID>_<DATE>_<AOI>.tif
+# e.g. NDVI_L8_oli_tirs_L2SP_166039_2023-06-06_amirkabir.tif
+# Patterns match 5 segments after the product prefix (PLATFORM SENSOR LEVEL SCENEID DATE)
+# before the AOI suffix.
+SEGMENTS = r'_[A-Za-z0-9]+_[A-Za-z0-9]+_[A-Za-z0-9]+_\d{4}-\d{2}-\d{2}'
+
 METRIC_PRODUCT_PATTERNS = {
-    'ETaDaily': r'^(ETaDaily|ETa)_[A-Z0-9]+_[A-Z0-9_]+_[A-Z0-9]+_[A-Z0-9]+_[A-Z0-9]+_\d{4}-\d{2}-\d{2}_',
-    'ETinst': r'^ETinst_[A-Z0-9]+_[A-Z0-9_]+_[A-Z0-9]+_[A-Z0-9]+_[A-Z0-9]+_\d{4}-\d{2}-\d{2}_',
-    'ETrF': r'^ETrF_[A-Z0-9]+_[A-Z0-9_]+_[A-Z0-9]+_[A-Z0-9]+_[A-Z0-9]+_\d{4}-\d{2}-\d{2}_',
-    'LE': r'^LE_[A-Z0-9]+_[A-Z0-9_]+_[A-Z0-9]+_[A-Z0-9]+_[A-Z0-9]+_\d{4}-\d{2}-\d{2}_',
-    'ETqualityClass': r'^ETqualityClass_[A-Z0-9]+_[A-Z0-9_]+_[A-Z0-9]+_[A-Z0-9]+_[A-Z0-9]+_\d{4}-\d{2}-\d{2}_',
-    'ETaClassified': r'^ETaClassified_[A-Z0-9]+_[A-Z0-9_]+_[A-Z0-9]+_[A-Z0-9]+_[A-Z0-9]+_\d{4}-\d{2}-\d{2}_',
-    'CWSI_ET': r'^CWSI_ET_[A-Z0-9]+_[A-Z0-9_]+_[A-Z0-9]+_[A-Z0-9]+_[A-Z0-9]+_\d{4}-\d{2}-\d{2}_',
-    'CWSI': r'^CWSI_(ET)?_[A-Z0-9]+_[A-Z0-9_]+_[A-Z0-9]+_[A-Z0-9]+_[A-Z0-9]+_\d{4}-\d{2}-\d{2}_',
-    'CWSI_LST': r'^CWSI_LST_[A-Z0-9]+_[A-Z0-9_]+_[A-Z0-9]+_[A-Z0-9]+_[A-Z0-9]+_\d{4}-\d{2}-\d{2}_',
-    'TVDI': r'^TVDI_[A-Z0-9]+_[A-Z0-9_]+_[A-Z0-9]+_[A-Z0-9]+_[A-Z0-9]+_\d{4}-\d{2}-\d{2}_',
-    'Rn': r'^Rn_[A-Z0-9]+_[A-Z0-9_]+_[A-Z0-9]+_[A-Z0-9]+_[A-Z0-9]+_\d{4}-\d{2}-\d{2}_',
-    'G': r'^G_[A-Z0-9]+_[A-Z0-9_]+_[A-Z0-9]+_[A-Z0-9]+_[A-Z0-9]+_\d{4}-\d{2}-\d{2}_',
-    'H': r'^H_[A-Z0-9]+_[A-Z0-9_]+_[A-Z0-9]+_[A-Z0-9]+_[A-Z0-9]+_\d{4}-\d{2}-\d{2}_',
-    # METRIC naming convention: NDVI_<PLATFORM>_<SENSOR>_<LEVEL>_<RES>_<SCENEID>_<DATE>_<AOI>.tif
-    # Pattern allows 4+ underscore-separated segments ending with date
+    'ETaDaily': r'^ETaDaily' + SEGMENTS + r'_',
+    'ETinst': r'^ETinst' + SEGMENTS + r'_',
+    'ETrF': r'^ETrF' + SEGMENTS + r'_',
+    'LE': r'^LE' + SEGMENTS + r'_',
+    'ETqualityClass': r'^ETqualityClass' + SEGMENTS + r'_',
+    'ETaClassified': r'^ETaClassified' + SEGMENTS + r'_',
+    'CWSI_ET': r'^CWSI_ET' + SEGMENTS + r'_',
+    'CWSI': r'^CWSI_(ET)?' + SEGMENTS + r'_',
+    'CWSI_LST': r'^CWSI_LST' + SEGMENTS + r'_',
+    'TVDI': r'^TVDI' + SEGMENTS + r'_',
+    'Rn': r'^Rn' + SEGMENTS + r'_',
+    'G': r'^G' + SEGMENTS + r'_',
+    'H': r'^H' + SEGMENTS + r'_',
+    # Flexible patterns (variable number of segments) for remaining products
     'NDVI': r'^NDVI_[A-Z0-9_]+_\d{4}-\d{2}-\d{2}',
     'EVI': r'^EVI_[A-Z0-9_]+_\d{4}-\d{2}-\d{2}',
     'LAI': r'^LAI_[A-Z0-9_]+_\d{4}-\d{2}-\d{2}',

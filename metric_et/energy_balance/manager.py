@@ -56,7 +56,7 @@ class EnergyBalanceConfig:
     dt_b: Optional[float] = None
     
     # Output keys
-    output_keys: tuple = ('G', 'H', 'LE', 'rah', 'EF', 'ET_inst')
+    output_keys: tuple = ('G', 'H', 'LE', 'rah', 'EF', 'ET_inst', 'dT')
 
 
 class EnergyBalanceManager:

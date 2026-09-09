@@ -700,10 +700,39 @@ class PlanetaryComputerLandsatFetcher:
         row = item.properties.get('landsat:wrs_row')
         sun_elevation = item.properties.get("view:sun_elevation")
         sun_azimuth = item.properties.get("view:sun_azimuth")
-        
+
+        # Derive platform and instruments from the Landsat scene_id prefix
+        # (e.g. LC08 -> landsat-8 / oli_tirs; LC09 -> landsat-9 / oli_tirs)
+        platform = "unknown"
+        instruments = []
+        if scene_id:
+            prefix = scene_id.split('_')[0].upper()
+            if prefix in ("LC08", "LO08"):
+                platform = "landsat-8"
+                instruments = ["oli", "tirs"]
+            elif prefix in ("LC09", "LO09"):
+                platform = "landsat-9"
+                instruments = ["oli", "tirs"]
+            elif prefix in ("LC07",):
+                platform = "landsat-7"
+                instruments = ["etm"]
+
+        # Derive processing level (L2SP/L1TP/...) if present in properties
+        correction = item.properties.get("landsat:correction") or item.properties.get("landsat:processing_level")
+
+        # Use the Landsat product scene_id if available
+        landsat_scene_id = item.properties.get("landsat:scene_id", scene_id)
+
         mtl_data = {
             "item_id": scene_id,
+            "landsat:scene_id": landsat_scene_id,
             "datetime": scene_date,
+            "platform": platform,
+            "instruments": instruments,
+            "landsat_correction": correction,
+            "cloud_cover": cloud_cover,
+            "path": path,
+            "row": row,
             "cloud_cover": cloud_cover,
             "path": path,
             "row": row,

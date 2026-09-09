@@ -17,6 +17,7 @@ import logging
 import os
 import sys
 import warnings
+import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -221,6 +222,9 @@ def fetch_all_scenes(
             logger.info(f"Downloaded scene: {item.id} for {scene_date}")
         except Exception as e:
             logger.warning(f"Failed to download scene {item.id}: {e}")
+            if scene_dir.exists():
+                shutil.rmtree(scene_dir, ignore_errors=True)
+                logger.info(f"Removed incomplete scene directory: {scene_dir}")
             continue
     
     logger.info(f"Successfully fetched {len(results)} scene(s)")
