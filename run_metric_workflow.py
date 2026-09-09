@@ -207,9 +207,9 @@ class METRICWorkflow:
         self.source_crs = source_crs
         self.interpolation_method = interpolation_method
         self.extrapolation_days = extrapolation_days
-        from metric_et.config.settings import OUTPUT_PRESETS
+        from metric_et.config.settings import OUTPUT_PRESETS, OUTPUT_PRODUCTS
         if output_categories is None:
-            self.output_categories = OUTPUT_PRESETS.get("standard", ["et_core", "energy_balance", "surface_props"])
+            self.output_categories = OUTPUT_PRESETS.get("full", list(OUTPUT_PRODUCTS.keys()))
         else:
             self.output_categories = output_categories
         self.products = products
@@ -1033,7 +1033,6 @@ class METRICWorkflow:
             'source_crs': self.source_crs,
             'interpolation_method': self.interpolation_method,
             'extrapolation_days': self.extrapolation_days,
-            'include_surface_properties': self.include_surface,
             'results': results,
             'errors': errors or []
         }

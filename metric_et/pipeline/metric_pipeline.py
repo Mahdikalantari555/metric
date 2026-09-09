@@ -32,7 +32,8 @@ class METRICPipeline:
     def run(
         self, landsat_dir: str, meteo_data: Dict,
         output_dir: Optional[str] = None, roi_path: Optional[str] = None,
-        save_visualization: bool = False
+        save_visualization: bool = False,
+        output_categories: Optional[List[str]] = None
     ) -> Dict[str, xr.DataArray]:
         """Run complete METRIC ETa processing pipeline."""
         import logging
@@ -107,12 +108,17 @@ class METRICPipeline:
             logger.info("-" * 60)
             self.calculate_et()
 
+            # Propagate output_categories into config so save_results uses it
+            if output_categories is not None:
+                self.config['output_categories'] = output_categories
+
             # Step 7: Save results if output directory provided
             if output_dir:
                 logger.info("-" * 60)
                 logger.info("Step 7: Saving results")
                 logger.info("-" * 60)
-                self.save_results(output_dir, save_visualization=save_visualization)
+                self.save_results(output_dir, save_visualization=save_visualization,
+                                  output_categories=self.config.get('output_categories'))
 
             logger.info("=" * 60)
             logger.info("METRICPipeline.run() - COMPLETED SUCCESSFULLY")
