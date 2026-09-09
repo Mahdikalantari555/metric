@@ -67,21 +67,27 @@ class METRICPipeline:
             logger.info("-" * 60)
             self.calculate_surface_properties()
 
-            # Step 3: Calculate radiation balance (Rn)
+            # Step 3: Calculate spectral indices (Stage 3b — per-scene)
             logger.info("-" * 60)
-            logger.info("Step 3: Calculating radiation balance")
+            logger.info("Step 3b: Calculating spectral indices")
+            logger.info("-" * 60)
+            self.calculate_spectral_indices()
+
+            # Step 4: Calculate radiation balance (Rn)
+            logger.info("-" * 60)
+            logger.info("Step 4: Calculating radiation balance")
             logger.info("-" * 60)
             self.calculate_radiation_balance()
 
-            # Step 4: Calculate soil heat flux (G) - calibration-free
+            # Step 5: Calculate soil heat flux (G) - calibration-free
             logger.info("-" * 60)
-            logger.info("Step 4: Calculating soil heat flux")
+            logger.info("Step 5: Calculating soil heat flux")
             logger.info("-" * 60)
             self.calculate_soil_heat_flux()
 
-            # Step 5: Apply unified METRIC calibration pipeline
+            # Step 6: Apply unified METRIC calibration pipeline
             logger.info("-" * 60)
-            logger.info("Step 5: Applying unified METRIC calibration pipeline")
+            logger.info("Step 6: Applying unified METRIC calibration pipeline")
             logger.info("-" * 60)
             self.calibrate()
 
@@ -94,10 +100,10 @@ class METRICPipeline:
                     "However, proceeding with ET calculation for quality assessment."
                 )
                 # Continue to ET calculation instead of returning early
-            
-            # Step 6: Calculate final ET
+
+            # Step 7: Calculate final ET
             logger.info("-" * 60)
-            logger.info("Step 6: Calculating evapotranspiration")
+            logger.info("Step 7: Calculating evapotranspiration")
             logger.info("-" * 60)
             self.calculate_et()
 
@@ -741,7 +747,7 @@ class METRICPipeline:
 
             # Calculate stress indices (CWSI_LST, TVDI) if ndvi and lst available
             try:
-                from ..surface.indices import CWSILSTCalculator, TVDICalculator
+                from ..surface.stress import CWSILSTCalculator, TVDICalculator
                 if "ndvi" in self.data.bands() and "lst" in self.data.bands():
                     CWSILSTCalculator().compute(self.data)
                     logger.info("CWSI_LST calculation completed")
@@ -760,7 +766,45 @@ class METRICPipeline:
         except Exception as e:
             logger.error(f"Error calculating surface properties: {e}")
             raise
-    
+
+    def calculate_spectral_indices(self) -> None:
+        """Calculate per-scene spectral indices (Stage 3b).
+
+        Computes NDMI, MSI, NMDI, NIRv, GCI, NDSI, SI_T.
+        Missing bands cause a warning log and skip that index only.
+        """
+        import logging
+
+        logger = logging.getLogger(__name__)
+
+        try:
+            from ..surface.moisture import NDMI, MSI, NMDI
+            from ..surface.productivity import NIRv, GCI
+            from ..surface.salinity import NDSI, SI_T
+
+            idx_classes = [
+                ("ndmi", NDMI),
+                ("msi", MSI),
+                ("nmdi", NMDI),
+                ("nirv", NIRv),
+                ("gci", GCI),
+                ("ndsi", NDSI),
+                ("si_t", SI_T),
+            ]
+            for name, cls in idx_classes:
+                try:
+                    cls().compute(self.data)
+                    logger.info(f"Spectral index '{name}' computed")
+                except ValueError as e:
+                    logger.warning(f"Spectral index '{name}' skipped: {e}")
+                except Exception as e:
+                    logger.warning(f"Spectral index '{name}' failed: {e}")
+
+        except Exception as e:
+            logger.warning(f"Spectral indices stage failed: {e}")
+
+        logger.info("Spectral indices calculation completed")
+
     def calculate_radiation_balance(self) -> None:
         """Calculate radiation balance components."""
         from ..radiation import ShortwaveRadiation, LongwaveRadiation, NetRadiation
@@ -1496,22 +1540,23 @@ class METRICPipeline:
                         name_lookup[entry[0]] = entry
                 products_to_use = [name_lookup[p] for p in products_to_use if p in name_lookup]
             
-            # Determine if surface properties should be included
-            include_surface = self.config.get('include_surface_properties', True)
-            
-            # Get AOI name from config or ROI path
+            # Determine output categories from config or fall back to default
+            output_categories = self.config.get('output_categories')
+            if output_categories is None:
+                output_categories = ['et_core', 'energy_balance', 'surface_props']
+
             aoi_name = self.config.get('aoi_name')
             if not aoi_name:
                 roi_path = self.roi_path or self.config.get('roi_path')
                 if roi_path:
                     aoi_name = os.path.splitext(os.path.basename(roi_path))[0]
             aoi_name = aoi_name or 'AOI'
-            
+
             # Use OutputWriter to save products
             writer = OutputWriter(
                 output_dir=output_dir,
                 output_products=products_to_use,
-                include_surface_properties=include_surface,
+                output_categories=output_categories,
                 aoi_name=aoi_name
             )
             

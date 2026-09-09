@@ -379,30 +379,25 @@ class OutputWriter:
         compression: str = "LZW",
         nodata: float = np.nan,
         output_products: Optional[list] = None,
-        include_surface_properties: bool = False,
+        output_categories: Optional[list] = None,
         aoi_name: str = "AOI"
     ):
         self.output_dir = Path(output_dir)
         self.compression = compression
         self.nodata = nodata
         self.output_files = []
-        self._include_surface = include_surface_properties
         self._aoi_name = aoi_name
-        
+
         if output_products is not None:
             self._output_products = output_products
+        elif output_categories is not None:
+            from ..config.settings import get_output_products
+            self._output_products = get_output_products(output_categories)
         else:
-            # Build product list from categories
-            all_products = (
-                self.DEFAULT_PRODUCTS['required'] +
-                self.DEFAULT_PRODUCTS['optional'] +
-                self.DEFAULT_PRODUCTS['quality']
-            )
-            if include_surface_properties:
-                all_products += self.DEFAULT_PRODUCTS['surface']
-            
-            self._output_products = all_products
-        
+            # Default: use standard preset categories
+            from ..config.settings import get_output_products
+            self._output_products = get_output_products(["et_core", "energy_balance", "surface_props"])
+
         self.output_dir.mkdir(parents=True, exist_ok=True)
     
     def _make_filename(

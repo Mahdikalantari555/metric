@@ -146,7 +146,7 @@ class TestCWSILST:
         return cube, ndvi, lst
 
     def test_cwsi_lst_basic(self):
-        from metric_et.surface.indices import CWSILSTCalculator
+        from metric_et.surface.stress import CWSILSTCalculator
         cube, _, _ = self._make_cube()
         calc = CWSILSTCalculator()
         result = calc.compute_cwsi_lst(cube.get("lst"), cube.get("ndvi"))
@@ -157,7 +157,7 @@ class TestCWSILST:
         assert np.all(vals >= 0) and np.all(vals <= 1)
 
     def test_cwsi_lst_via_cube(self):
-        from metric_et.surface.indices import CWSILSTCalculator
+        from metric_et.surface.stress import CWSILSTCalculator
         cube, _, _ = self._make_cube()
         CWSILSTCalculator().compute(cube)
         assert "cwsi_lst" in cube.bands()
@@ -165,7 +165,7 @@ class TestCWSILST:
     def test_cwsi_lst_missing_band(self):
         import xarray as xr
         from metric_et.core.datacube import DataCube
-        from metric_et.surface.indices import CWSILSTCalculator
+        from metric_et.surface.stress import CWSILSTCalculator
         cube = DataCube()
         cube.add("ndvi", xr.DataArray(np.ones((5, 5)), dims=["y", "x"]))
         with pytest.raises(ValueError, match="lst"):
@@ -174,7 +174,7 @@ class TestCWSILST:
     def test_cwsi_lst_clip_false(self):
         import xarray as xr
         from metric_et.core.datacube import DataCube
-        from metric_et.surface.indices import CWSILSTCalculator
+        from metric_et.surface.stress import CWSILSTCalculator
         np.random.seed(1)
         ndvi = np.random.uniform(0.2, 0.9, (20, 20))
         lst = 300 - 10 * ndvi + np.random.randn(20, 20) * 2
@@ -197,7 +197,7 @@ class TestCWSILST:
     def test_cwsi_lst_not_enough_bins(self):
         import xarray as xr
         from metric_et.core.datacube import DataCube
-        from metric_et.surface.indices import CWSILSTCalculator
+        from metric_et.surface.stress import CWSILSTCalculator
         # ndvi single value -> only 1 bin
         cube = DataCube()
         cube.add("ndvi", xr.DataArray(np.full((5, 5), 0.25), dims=["y", "x"]))
@@ -221,7 +221,7 @@ class TestTVDI:
         return cube
 
     def test_tvdi_basic(self):
-        from metric_et.surface.indices import TVDICalculator
+        from metric_et.surface.stress import TVDICalculator
         cube = self._make_cube()
         calc = TVDICalculator()
         result = calc.compute_tvdi(cube.get("lst"), cube.get("ndvi"))
@@ -235,7 +235,7 @@ class TestTVDI:
         assert "lst_min" in result.attrs
 
     def test_tvdi_via_cube(self):
-        from metric_et.surface.indices import TVDICalculator
+        from metric_et.surface.stress import TVDICalculator
         cube = self._make_cube()
         TVDICalculator().compute(cube)
         assert "tvdi" in cube.bands()
@@ -243,7 +243,7 @@ class TestTVDI:
     def test_tvdi_missing_band(self):
         import xarray as xr
         from metric_et.core.datacube import DataCube
-        from metric_et.surface.indices import TVDICalculator
+        from metric_et.surface.stress import TVDICalculator
         cube = DataCube()
         cube.add("lst", xr.DataArray(np.ones((5, 5)), dims=["y", "x"]))
         with pytest.raises(ValueError, match="ndvi"):
@@ -252,7 +252,7 @@ class TestTVDI:
     def test_tvdi_not_enough_bins(self):
         import xarray as xr
         from metric_et.core.datacube import DataCube
-        from metric_et.surface.indices import TVDICalculator
+        from metric_et.surface.stress import TVDICalculator
         cube = DataCube()
         cube.add("ndvi", xr.DataArray(np.full((5, 5), 0.25), dims=["y", "x"]))
         cube.add("lst", xr.DataArray(np.full((5, 5), 300.0), dims=["y", "x"]))

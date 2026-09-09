@@ -263,126 +263,95 @@ OUTPUT_VARIABLES = {
 # - dtype: Output data type (float32, uint8, etc.)
 
 OUTPUT_PRODUCTS = {
-    # Required ET products (always included by default)
-    "required": [
+    # ET core products
+    "et_core": [
         ("ETa_daily", "ET_daily", "float32"),
         ("ET_inst", "ET_inst", "float32"),
         ("ETrF", "ETrF", "float32"),
         ("LE", "LE", "float32"),
-        ("quality", "quality_mask", "uint8")
     ],
-    # Optional energy balance products
+    # Energy balance components
     "energy_balance": [
         ("Rn", "R_n", "float32"),
         ("G", "G", "float32"),
-        ("H", "H", "float32")
+        ("H", "H", "float32"),
     ],
-    # Quality layer products
+    # Quality layers
     "quality": [
         ("ET_quality_class", "ET_quality_class", "uint8"),
-        ("ETa_classified", "ETa_class", "uint8")
+        ("ETa_class", "ETa_class", "uint8"),
     ],
-    # Surface property products
-    "surface": [
+    # Surface physical properties
+    "surface_props": [
         ("NDVI", "ndvi", "float32"),
-        ("Albedo", "albedo", "float32"),
-        ("LST", "lst", "float32"),
+        ("EVI", "evi", "float32"),
         ("LAI", "lai", "float32"),
-        ("Emissivity", "emissivity", "float32"),
         ("FVC", "fvc", "float32"),
         ("SAVI", "savi", "float32"),
-        ("CWSI_ET", "CWSI_ET", "float32"),
-        ("CWSI_LST", "cwsi_lst", "float32"),
-        ("TVDI", "tvdi", "float32")
+        ("Albedo", "albedo", "float32"),
+        ("LST", "lst", "float32"),
+        ("Emissivity", "emissivity", "float32"),
     ],
-    # Radiation products
+    # Radiation fluxes
     "radiation": [
         ("Rns", "R_ns", "float32"),
         ("Rnl", "R_nl", "float32"),
         ("Rs_down", "Rs_down", "float32"),
         ("Rl_down", "R_l_down", "float32"),
-        ("Rl_up", "R_l_up", "float32")
-    ]
+        ("Rl_up", "R_l_up", "float32"),
+    ],
+    # Spectral indices (per-scene)
+    "spectral_indices": [
+        ("NDVI", "ndvi", "float32"),
+        ("SAVI", "savi", "float32"),
+        ("EVI", "evi", "float32"),
+        ("NDMI", "ndmi", "float32"),
+        ("MSI", "msi", "float32"),
+        ("NMDI", "nmdi", "float32"),
+        ("NIRv", "nirv", "float32"),
+        ("GCI", "gci", "float32"),
+        ("NDSI", "ndsi", "float32"),
+        ("SI_T", "si_t", "float32"),
+    ],
+    # Stress indices (per-scene + temporal)
+    "stress_indices": [
+        ("CWSI_ET", "CWSI_ET", "float32"),
+        ("CWSI_LST", "cwsi_lst", "float32"),
+        ("TVDI", "tvdi", "float32"),
+        ("VSWI", "vswi", "float32"),
+        ("TCI", "tci", "float32"),
+        ("VCI", "vci", "float32"),
+        ("VHI", "vhi", "float32"),
+    ],
 }
 
-# Helper function to create custom output product list
-def get_output_products(
-    include_required: bool = True,
-    include_energy: bool = True,
-    include_quality: bool = True,
-    include_surface: bool = False,
-    include_radiation: bool = False,
-    custom_products: list = None
-) -> list:
-    """Generate a custom output product list based on inclusion flags.
-    
+
+def get_output_products(categories: list) -> list:
+    """Resolve a list of category names to flat product tuple list.
+
     Args:
-        include_required: Include required ET products
-        include_energy: Include energy balance products (Rn, G, H)
-        include_quality: Include quality layer products
-        include_surface: Include surface property products
-        include_radiation: Include radiation products
-        custom_products: Additional custom products to include
-    
+        categories: List of category keys from OUTPUT_PRODUCTS.
+
     Returns:
-        List of product tuples (output_name, band_name, dtype)
+        Flat list of (output_name, band_name, dtype) tuples.
+
+    Raises:
+        ValueError: If an unknown category is encountered.
     """
     products = []
-    
-    if include_required:
-        products.extend(OUTPUT_PRODUCTS['required'])
-    if include_energy:
-        products.extend(OUTPUT_PRODUCTS['energy_balance'])
-    if include_quality:
-        products.extend(OUTPUT_PRODUCTS['quality'])
-    if include_surface:
-        products.extend(OUTPUT_PRODUCTS['surface'])
-    if include_radiation:
-        products.extend(OUTPUT_PRODUCTS['radiation'])
-    
-    if custom_products:
-        products.extend(custom_products)
-    
+    for cat in categories:
+        if cat not in OUTPUT_PRODUCTS:
+            raise ValueError(
+                f"Unknown output category '{cat}'. "
+                f"Available: {list(OUTPUT_PRODUCTS.keys())}"
+            )
+        products.extend(OUTPUT_PRODUCTS[cat])
     return products
 
 
-# Predefined output product presets
+# Predefined output product presets — exactly three entries
 OUTPUT_PRESETS = {
-    # Minimal: Only essential ET products
-    "minimal": [
-        ("ETa_daily", "ET_daily", "float32"),
-        ("ETrF", "ETrF", "float32")
-    ],
-    # Standard: ET products with energy balance
-    "standard": [
-        ("ETa_daily", "ET_daily", "float32"),
-        ("ET_inst", "ET_inst", "float32"),
-        ("ETrF", "ETrF", "float32"),
-        ("Rn", "R_n", "float32"),
-        ("G", "G", "float32"),
-        ("H", "H", "float32"),
-        ("LE", "LE", "float32")
-    ],
-    # Full: All available products
-    "full": None,  # None means all products
-    
-    # ET only: Instantaneous and daily ET
-    "et_only": [
-        ("ETa_daily", "ET_daily", "float32"),
-        ("ET_inst", "ET_inst", "float32"),
-        ("ETrF", "ETrF", "float32")
-    ],
-    
-    # With quality: ET products with quality layers
-    "with_quality": [
-        ("ETa_daily", "ET_daily", "float32"),
-        ("ET_inst", "ET_inst", "float32"),
-        ("ETrF", "ETrF", "float32"),
-        ("ET_quality_class", "ET_quality_class", "uint8"),
-        ("ETa_classified", "ETa_class", "uint8"),
-        ("CWSI_ET", "CWSI_ET", "float32")
-    ],
-    
-    # Research: All products including surface and radiation
-    "research": None  # All products
+    "minimal": ["et_core"],
+    "standard": ["et_core", "energy_balance", "surface_props"],
+    "full": list(OUTPUT_PRODUCTS.keys()),
 }

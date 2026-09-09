@@ -74,7 +74,7 @@ class METRICWorkflow:
         source_crs: str = "EPSG:4326",
         interpolation_method: str = "weighted",
         extrapolation_days: int = 14,
-        include_surface: bool = True,
+        output_categories: Optional[List[str]] = None,
         products: Optional[List[str]] = None,
         save_scenes: bool = True,
         visualization: bool = False,
@@ -93,7 +93,7 @@ class METRICWorkflow:
             source_crs: CRS of input ROI (use UTM zone for better accuracy)
             interpolation_method: Method for ET interpolation ('linear' or 'weighted')
             extrapolation_days: Number of days to extrapolate beyond last scene
-            include_surface: Whether to include surface properties in output
+            output_categories: List of output category names to include. None uses standard preset.
             products: List of product names to generate. None = all products.
             save_scenes: Whether to retain the scenes/ folder after processing.
                          When False, scenes/ is deleted after product organization.
@@ -207,7 +207,11 @@ class METRICWorkflow:
         self.source_crs = source_crs
         self.interpolation_method = interpolation_method
         self.extrapolation_days = extrapolation_days
-        self.include_surface = include_surface
+        from metric_et.config.settings import OUTPUT_PRESETS
+        if output_categories is None:
+            self.output_categories = OUTPUT_PRESETS.get("standard", ["et_core", "energy_balance", "surface_props"])
+        else:
+            self.output_categories = output_categories
         self.products = products
         self.save_scenes = save_scenes
         self.visualization = visualization
@@ -232,7 +236,7 @@ class METRICWorkflow:
         logger.info(f"Source CRS: {self.source_crs}")
         logger.info(f"Interpolation method: {self.interpolation_method}")
         logger.info(f"Extrapolation days: {self.extrapolation_days}")
-        logger.info(f"Include surface: {self.include_surface}")
+        logger.info(f"Output categories: {self.output_categories}")
         logger.info(f"Save scenes: {self.save_scenes}")
         logger.info(f"Visualization: {self.visualization}")
         logger.info(f"Scenes directory: {self.scenes_dir}")
@@ -286,11 +290,18 @@ class METRICWorkflow:
             results['scenes_processed'] = len(processed_scenes)
             results['scenes_failed'] = len(scenes) - len(processed_scenes)
             logger.info(f"STEP 2 COMPLETE: Processed {len(processed_scenes)} scenes, {results['scenes_failed']} failed")
-            
+
             if not processed_scenes:
                 logger.error("No scenes processed successfully. Workflow aborted.")
                 return results
-            
+
+            # Step 2b: Compute temporal stress indices from accumulated NDVI/LST
+            logger.info("=" * 60)
+            logger.info("STEP 2b: Computing temporal stress indices")
+            logger.info("=" * 60)
+            self._compute_temporal_indices(processed_scenes)
+            logger.info("STEP 2b COMPLETE: Temporal indices computed")
+
             # Step 3: Interpolate and extrapolate ET FIRST
             # We must interpolate BEFORE organizing products because we need
             # to find ETrF files in the result_* directories first
@@ -511,8 +522,8 @@ class METRICWorkflow:
                     'calibration': {
                         'method': 'automatic'
                     },
-                    'output_products': self.products,  # Custom product list or None for all
-                    'include_surface_properties': self.include_surface,
+                    'output_products': self.products,
+                    'output_categories': self.output_categories,
                     'aoi_name': self.aoi_name
                 }
                 logger.info(f"Pipeline config: {config}")
@@ -549,6 +560,7 @@ class METRICWorkflow:
                 
                 scene['et_output_dir'] = str(scene_output_dir)
                 scene['et_results'] = {k: str(v) for k, v in results.items()} if results else {}
+                scene['_cube'] = pipeline.data  # Store cube for temporal index computation
                 
                 processed.append(scene)
                 logger.info(f"Successfully processed {scene_date} ({scene_id})")
@@ -568,7 +580,100 @@ class METRICWorkflow:
         
         logger.info("_calculate_et_all() - COMPLETED")
         return processed
-    
+
+    def _compute_temporal_indices(self, processed_scenes: List[Dict]) -> None:
+        """Compute temporal stress indices (TCI, VCI, VHI) from accumulated NDVI/LST.
+
+        Accumulates ndvi and lst from each scene dict, builds min/max stacks,
+        then computes and attaches vci, tci, vhi DataArrays back to each scene's DataCube.
+        TCI uses the last scene's LST as the instantaneous value.
+        """
+        import numpy as np
+        import xarray as xr
+        from metric_et.surface.temporal_stress import TCI, VCI, VHI
+
+        if not processed_scenes:
+            logger.warning("No processed scenes for temporal indices")
+            return
+
+        # Gather ndvi and lst from each scene's DataCube
+        ndvi_stacks = []
+        lst_stacks = []
+        for scene in processed_scenes:
+            cube = scene.get('_cube')
+            if cube is None:
+                continue
+            if 'ndvi' in cube.bands() and 'lst' in cube.bands():
+                ndvi_stacks.append(cube.get('ndvi').values)
+                lst_stacks.append(cube.get('lst').values)
+
+        if len(ndvi_stacks) < 1 or len(lst_stacks) < 1:
+            logger.warning("Insufficient scenes with ndvi/lst for temporal indices")
+            return
+
+        ndvi_stack = np.stack(ndvi_stacks, axis=0)
+        lst_stack = np.stack(lst_stacks, axis=0)
+
+        ndvi_min = np.nanmin(ndvi_stack, axis=0)
+        ndvi_max = np.nanmax(ndvi_stack, axis=0)
+        lst_min = np.nanmin(lst_stack, axis=0)
+        lst_max = np.nanmax(lst_stack, axis=0)
+
+        # Create DataArrays for min/max
+        first_cube = next((s['_cube'] for s in processed_scenes if '_cube' in s), None)
+        if first_cube is None:
+            logger.warning("No valid cube found for temporal index coords")
+            return
+
+        dims = first_cube.get('ndvi').dims
+        coords = first_cube.get('ndvi').coords
+
+        ndvi_min_da = xr.DataArray(ndvi_min, dims=dims, coords=coords)
+        ndvi_max_da = xr.DataArray(ndvi_max, dims=dims, coords=coords)
+        lst_min_da = xr.DataArray(lst_min, dims=dims, coords=coords)
+        lst_max_da = xr.DataArray(lst_max, dims=dims, coords=coords)
+
+        # Attach min/max to each scene's cube
+        for scene in processed_scenes:
+            cube = scene.get('_cube')
+            if cube is None:
+                continue
+            cube.add('ndvi_min', ndvi_min_da)
+            cube.add('ndvi_max', ndvi_max_da)
+            cube.add('lst_min', lst_min_da)
+            cube.add('lst_max', lst_max_da)
+
+        # Compute TCI using last scene's LST as instantaneous value
+        last_scene = processed_scenes[-1]
+        last_cube = last_scene.get('_cube')
+        if last_cube and 'lst' in last_cube.bands():
+            tci_calc = TCI()
+            tci_result = tci_calc.compute(
+                last_cube.get('lst'), lst_min_da, lst_max_da
+            )
+            last_cube.add('tci', tci_result)
+            logger.info(f"TCI computed for last scene, valid pixels: {np.sum(np.isfinite(tci_result.values))}")
+
+        # Compute VCI using last scene's NDVI
+        if last_cube and 'ndvi' in last_cube.bands():
+            vci_calc = VCI()
+            vci_result = vci_calc.compute(
+                last_cube.get('ndvi'), ndvi_min_da, ndvi_max_da
+            )
+            last_cube.add('vci', vci_result)
+            logger.info(f"VCI computed for last scene, valid pixels: {np.sum(np.isfinite(vci_result.values))}")
+
+        # Compute VHI from TCI and VCI on last scene
+        if last_cube and 'tci' in last_cube.bands() and 'vci' in last_cube.bands():
+            vhi_calc = VHI()
+            vhi_result = vhi_calc.compute(
+                last_cube.get('vci'), last_cube.get('tci')
+            )
+            last_cube.add('vhi', vhi_result)
+            logger.info(f"VHI computed for last scene, valid pixels: {np.sum(np.isfinite(vhi_result.values))}")
+
+        logger.info(f"Temporal indices computed across {len(processed_scenes)} scenes")
+
     def _interpolate_et(self, processed_scenes: List[Dict]) -> tuple:
         """
         Interpolate and extrapolate ET for processed scenes.
@@ -990,8 +1095,10 @@ def main():
         help='Number of days to extrapolate (default: 14)'
     )
     parser.add_argument(
-        '--no-surface', action='store_true',
-        help='Disable surface properties in output'
+        '--output-categories', type=str, default=None,
+        help='Comma-separated list of output categories (e.g. "et_core,spectral_indices,stress_indices"). '
+             'Available: et_core, energy_balance, quality, surface_props, radiation, spectral_indices, stress_indices. '
+             'Default: standard preset.'
     )
     parser.add_argument(
         '--products', type=str, default=None,
@@ -1027,7 +1134,7 @@ def main():
         source_crs=args.source_crs,
         interpolation_method=args.interpolation_method,
         extrapolation_days=args.extrapolation_days,
-        include_surface=not args.no_surface,
+        output_categories=[c.strip() for c in args.output_categories.split(',')] if args.output_categories else None,
         products=products,
         save_scenes=args.save_scenes,
         visualization=args.visualization
