@@ -33,6 +33,31 @@ Invalid pixels (denominator == 0 or non-finite input) SHALL be set to NaN.
 
 ---
 
+### Requirement: MNDWI — Modified Normalized Difference Water Index
+The `MNDWI` class SHALL compute:
+
+    MNDWI = (green − swir16) / (green + swir16)
+
+Required bands: `green`, `swir16`.
+
+The result SHALL be an `xr.DataArray` named `mndwi` with:
+- `long_name`: "Modified Normalized Difference Water Index"
+- `units`: "dimensionless"
+- `range`: "[-1, 1]"
+- Improves water detection, especially in urban areas
+
+Invalid pixels (denominator == 0 or non-finite input) SHALL be set to NaN.
+
+#### Scenario: MNDWI on valid Landsat data
+- **WHEN** a DataCube contains `green` and `swir16` with finite values
+- **THEN** `mndwi` is written to the cube with values in [-1, 1]
+
+#### Scenario: MNDWI missing bands raises
+- **WHEN** `compute(cube)` is called without `green` or `swir16`
+- **THEN** `ValueError` is raised listing the missing band
+
+---
+
 ### Requirement: MSI — Moisture Stress Index
 The `MSI` class SHALL compute:
 

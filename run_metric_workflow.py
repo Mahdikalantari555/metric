@@ -75,7 +75,6 @@ class METRICWorkflow:
         interpolation_method: str = "weighted",
         extrapolation_days: int = 14,
         output_categories: Optional[List[str]] = None,
-        products: Optional[List[str]] = None,
         save_scenes: bool = True,
         visualization: bool = False,
         min_coverage_ratio: float = 0.95
@@ -94,7 +93,6 @@ class METRICWorkflow:
             interpolation_method: Method for ET interpolation ('linear' or 'weighted')
             extrapolation_days: Number of days to extrapolate beyond last scene
             output_categories: List of output category names to include. None uses standard preset.
-            products: List of product names to generate. None = all products.
             save_scenes: Whether to retain the scenes/ folder after processing.
                          When False, scenes/ is deleted after product organization.
             visualization: Whether to emit overview_<date>.png and et_map_<date>.png.
@@ -212,7 +210,6 @@ class METRICWorkflow:
             self.output_categories = OUTPUT_PRESETS.get("full", list(OUTPUT_PRODUCTS.keys()))
         else:
             self.output_categories = output_categories
-        self.products = products
         self.save_scenes = save_scenes
         self.visualization = visualization
         self.min_coverage_ratio = min_coverage_ratio
@@ -301,6 +298,8 @@ class METRICWorkflow:
             logger.info("=" * 60)
             self._compute_temporal_indices(processed_scenes)
             logger.info("STEP 2b COMPLETE: Temporal indices computed")
+            self._write_temporal_stress_indices(processed_scenes)
+            logger.info("STEP 2b COMPLETE: Temporal indices written")
 
             # Step 3: Interpolate and extrapolate ET FIRST
             # We must interpolate BEFORE organizing products because we need
@@ -522,7 +521,6 @@ class METRICWorkflow:
                     'calibration': {
                         'method': 'automatic'
                     },
-                    'output_products': self.products,
                     'output_categories': self.output_categories,
                     'aoi_name': self.aoi_name
                 }
@@ -543,7 +541,8 @@ class METRICWorkflow:
                     meteo_data={},  # Pipeline will fetch weather dynamically
                     output_dir=str(scene_output_dir),
                     roi_path=self.roi_path,
-                    save_visualization=self.visualization
+                    save_visualization=self.visualization,
+                    output_categories=self.output_categories
                 )
                 logger.info(f"Pipeline.run() completed, results: {results}")
                 
@@ -831,11 +830,11 @@ class METRICWorkflow:
             # Save interpolated/extrapolated results
             if interp_result:
                 logger.info(f"Saving {len(interp_result.get('dates', []))} interpolated files")
-                self._save_interpolated_results(interp_result, "interpolated")
-            
+                self._save_interpolated_results(interp_result, "interpolated", et0_data)
+
             if extrap_result:
                 logger.info(f"Saving {len(extrap_result.get('dates', []))} extrapolated files")
-                self._save_interpolated_results(extrap_result, "extrapolated")
+                self._save_interpolated_results(extrap_result, "extrapolated", et0_forecast)
             
             logger.info("Interpolation and extrapolation completed")
             return interp_result, extrap_result
@@ -848,92 +847,183 @@ class METRICWorkflow:
             # errors list is owned by run(); avoid NameError here and let run() handle reporting
             return None, None
     
-    def _save_interpolated_results(self, result: Dict, prefix: str) -> None:
+    def _save_interpolated_results(self, result: Dict, prefix: str,
+                                   et0_data=None) -> None:
         """
-        Save interpolated or extrapolated results to ETaDaily product folder.
+        Save interpolated or extrapolated ETaDaily results to product folder.
         Files are saved with _interpolated or _extrapolated suffix.
-        
+        Optionally also writes CWSI_ET when et0_data is provided.
+
         Args:
-            result: Interpolation/extrapolation result dictionary
-            prefix: Prefix for filenames ('interpolated' or 'extrapolated')
+            result: Interpolation/extrapolation result dictionary.
+            prefix: Prefix for filenames ('interpolated' or 'extrapolated').
+            et0_data: Optional ET0 DataArray (time-dim) used to derive CWSI_ET.
         """
         import rasterio
         import numpy as np
         from pathlib import Path
-        
+
         if not result or 'dates' not in result:
             return
-        
+
         dates = result['dates']
         eta_daily = result.get('ETa_daily')
-        
+
         if eta_daily is None or len(dates) == 0:
             return
-        
-        # Get reference raster for spatial info
-        # Use first scene's ETrF file
-        first_scene = list(self.staging_dir.glob("*/ETrF_*.tif"))[0]
 
-        with rasterio.open(first_scene) as src:
+        # Get reference raster for spatial info
+        ref_files = list(self.staging_dir.glob("*/ETrF_*.tif"))
+        if not ref_files:
+            ref_files = list(self.staging_dir.glob("**/*.tif"))
+        if not ref_files:
+            logger.warning("No reference raster found for writing interpolated results")
+            return
+
+        with rasterio.open(ref_files[0]) as src:
             crs = src.crs
             transform = src.transform
             height = src.height
             width = src.width
 
-        # Save directly to ETaDaily product folder
+        # Save ETaDaily files
         eta_daily_product_dir = self.staging_dir / "products" / "ETaDaily"
         eta_daily_product_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Save each date's result
+
         for i, date in enumerate(dates):
             if i >= len(eta_daily):
                 break
-            
+
             eta_data = eta_daily[i]
-            
             date_str = date.strftime('%Y%m%d') if hasattr(date, 'strftime') else str(date).replace('-', '')
-            
-            # Save in ETaDaily folder with _interpolated or _extrapolated suffix
+
             output_file = eta_daily_product_dir / f"ETaDaily_{prefix}_{date_str}_{self.aoi_name}.tif"
-            
             with rasterio.open(
-                output_file,
-                'w',
-                driver='GTiff',
-                height=height,
-                width=width,
-                count=1,
-                dtype='float32',
-                crs=crs,
-                transform=transform,
-                compress='lzw',
-                nodata=np.nan
+                str(output_file), 'w', driver='GTiff',
+                height=height, width=width, count=1, dtype='float32',
+                crs=crs, transform=transform, compress='lzw', nodata=np.nan
             ) as dst:
-                dst.write(eta_data.astype('float32'), 1)
-            
+                dst.write(np.nan_to_num(eta_data.astype('float32'), nan=np.nan), 1)
             logger.info(f"Saved {prefix} ETa for {date_str}: {output_file.name}")
+
+        # Save CWSI_ET when ET0 data is available
+        if et0_data is not None and hasattr(et0_data, 'sel'):
+            cwsi_dir = self.staging_dir / "products" / "CWSI_ET"
+            cwsi_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                et0_slice = et0_data.sel(time=slice(
+                    dates[0].strftime('%Y-%m-%d'),
+                    dates[-1].strftime('%Y-%m-%d')
+                ))
+                et0_vals = et0_slice.values  # shape: (n_dates,)
+                if et0_vals.size == len(dates) and np.isfinite(et0_vals).any():
+                    for i, date in enumerate(dates):
+                        if i >= len(eta_daily):
+                            break
+                        et0_val = et0_vals[i]
+                        if not np.isfinite(et0_val) or et0_val == 0:
+                            continue
+                        eta_data = eta_daily[i]
+                        cwsi_arr = np.where(
+                            np.isfinite(eta_data) & np.isfinite(et0_val),
+                            np.maximum(0.0, np.minimum(1.0, 1.0 - eta_data / et0_val)),
+                            np.nan
+                        ).astype('float32')
+                        date_str = date.strftime('%Y%m%d') if hasattr(date, 'strftime') else str(date).replace('-', '')
+                        out_file = cwsi_dir / f"CWSI_ET_{prefix}_{date_str}_{self.aoi_name}.tif"
+                        with rasterio.open(
+                            str(out_file), 'w', driver='GTiff',
+                            height=height, width=width, count=1, dtype='float32',
+                            crs=crs, transform=transform, compress='lzw', nodata=np.nan
+                        ) as dst:
+                            dst.write(cwsi_arr, 1)
+                        logger.info(f"Saved {prefix} CWSI_ET for {date_str}: {out_file.name}")
+                else:
+                    logger.debug(f"et0_slice size mismatch ({et0_vals.size} vs {len(dates)}), skipping CWSI_ET")
+            except Exception as e:
+                logger.warning(f"Could not write CWSI_ET interpolated files: {e}")
     
+    def _write_temporal_stress_indices(self, processed_scenes: List[Dict]) -> None:
+        """Write temporal stress indices (TCI, VCI, VHI) from the last scene's cube.
+
+        These are computed across the time series and attached only to the last
+        scene's cube; write them to the staging products directory so the
+        organizer picks them up.
+        """
+        import rasterio
+        import numpy as np
+        from pathlib import Path
+
+        if not processed_scenes:
+            return
+        cube = processed_scenes[-1].get('_cube')
+        if cube is None:
+            return
+
+        date_str = processed_scenes[-1]['date'].replace('-', '')
+        aoi = self.aoi_name
+
+        # Find a reference raster for CRS/transform/size
+        ref_files = list(self.staging_dir.glob("**/*.tif"))
+        if not ref_files:
+            logger.warning("No reference raster found for writing temporal stress indices")
+            return
+        ref_crs = ref_files[0]
+        with rasterio.open(ref_crs) as src:
+            crs, transform, height, width = src.crs, src.transform, src.height, src.width
+
+        bands = [("TCI", "tci"), ("VCI", "vci"), ("VHI", "vhi")]
+        for display_name, band_name in bands:
+            if band_name not in cube.bands():
+                logger.debug(f"Skipping {display_name}: band '{band_name}' not in cube")
+                continue
+            arr = cube.get(band_name).values
+            if not np.isfinite(arr).any():
+                logger.debug(f"Skipping {display_name}: all NaN")
+                continue
+            out_dir = self.staging_dir / "products" / display_name
+            out_dir.mkdir(parents=True, exist_ok=True)
+            out_file = out_dir / f"{display_name}_{date_str}_{aoi}.tif"
+            with rasterio.open(
+                str(out_file), 'w', driver='GTiff',
+                height=height, width=width, count=1, dtype='float32',
+                crs=crs, transform=transform, compress='lzw', nodata=np.nan
+            ) as dst:
+                dst.write(np.nan_to_num(arr, nan=np.nan).astype('float32'), 1)
+            logger.info(f"Wrote temporal index: {out_file.name}")
+
     def _organize_products(self) -> Dict:
         """
         Organize all products and create metadata.
         Metadata is saved in each product's folder.
-        
+
         Returns:
             Dictionary mapping product types to lists of organized file paths
         """
         logger.info("Organizing products and creating metadata")
-        
+
         try:
+            from metric_et.config.settings import OUTPUT_PRODUCTS
+            # Build allowed product list from selected categories
+            allowed = set()
+            for cat in self.output_categories:
+                if cat in OUTPUT_PRODUCTS:
+                    for display_name, band_name, _ in OUTPUT_PRODUCTS[cat]:
+                        allowed.add(display_name.lower())
+                        allowed.add(band_name.lower())
+            logger.info(f"Product filter (allowed): {sorted(allowed)}")
+
             # Organize ET output products (metadata_in_product_folder=True)
             organized = organize_products(
                 output_dir=str(self.staging_dir),
                 aoi_name=self.aoi_name,
-                create_metadata=True
+                create_metadata=True,
+                allowed_products=list(allowed)
             )
 
             logger.info(f"Organized {sum(len(v) for v in organized.values())} products")
             return organized
-            
+
         except Exception as e:
             logger.error(f"Product organization failed: {e}")
             return {}
@@ -1100,11 +1190,6 @@ def main():
              'Default: standard preset.'
     )
     parser.add_argument(
-        '--products', type=str, default=None,
-        help='Comma-separated list of products to generate (e.g., "ETaDaily,ETrF,NDVI,LST"). '
-             'If not specified, all products are generated.'
-    )
-    parser.add_argument(
         '--save-scenes', action=argparse.BooleanOptionalAction, default=True,
         help='Keep the scenes/ folder after processing (default: on). '
              'Use --no-save-scenes to delete it after product organization.'
@@ -1116,11 +1201,6 @@ def main():
     )
 
     args = parser.parse_args()
-
-    # Parse products list
-    products = None
-    if args.products:
-        products = [p.strip() for p in args.products.split(',')]
 
     # Create and run workflow
     workflow = METRICWorkflow(
@@ -1134,7 +1214,6 @@ def main():
         interpolation_method=args.interpolation_method,
         extrapolation_days=args.extrapolation_days,
         output_categories=[c.strip() for c in args.output_categories.split(',')] if args.output_categories else None,
-        products=products,
         save_scenes=args.save_scenes,
         visualization=args.visualization
     )

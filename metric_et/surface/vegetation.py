@@ -22,7 +22,6 @@ class VegetationIndices:
         - SAVI (Soil Adjusted Vegetation Index)
         - FVC (Fractional Vegetation Cover)
         - NDWI (Normalized Difference Water Index)
-        - MNDWI (Modified Normalized Difference Water Index)
     
     Attributes:
         ndvi_min: Minimum NDVI value for vegetation (default: 0.0)
@@ -93,13 +92,7 @@ class VegetationIndices:
         if "green" in cube.bands() and "nir08" in cube.bands():
             ndwi = self.compute_ndwi(cube)
             cube.add("ndwi", ndwi)
-        
-        # NOTE: MNDWI has been removed as per requirements
-        # If needed in future, uncomment the following:
-        # if "green" in cube.bands() and "swir16" in cube.bands():
-        #     mndwi = self.compute_mndwi(cube)
-        #     cube.add("mndwi", mndwi)
-        
+
         return cube
     
     def _validate_inputs(self, cube: DataCube) -> None:
@@ -475,58 +468,6 @@ class VegetationIndices:
         }
         
         return ndwi
-    
-    def compute_mndwi(self, cube: DataCube) -> xr.DataArray:
-        """
-        Compute Modified Normalized Difference Water Index (MNDWI).
-        
-        MNDWI improves water detection, especially in urban areas:
-        MNDWI = (Green - SWIR) / (Green + SWIR)
-        (Typically uses SWIR band 1, i.e., swir16)
-        
-        Values range from -1 to 1:
-            - Positive values: Water (higher = clearer water)
-            - Negative values: Non-water features
-        
-        Args:
-            cube: DataCube containing green and swir16 bands
-            
-        Returns:
-            MNDWI as dimensionless DataArray (-1 to 1)
-            
-        Raises:
-            ValueError: If green or swir16 bands are missing
-        """
-        if "green" not in cube.bands() or "swir16" not in cube.bands():
-            raise ValueError("MNDWI requires 'green' and 'swir16' bands")
-        
-        green = cube.get("green").astype(float)
-        swir = cube.get("swir16").astype(float)
-        
-        # Get nodata mask
-        valid_mask = self._get_nodata_mask(cube)
-        
-        # Compute MNDWI
-        denominator = green + swir
-        # Avoid division by zero
-        with np.errstate(divide='ignore', invalid='ignore'):
-            mndwi = (green - swir) / denominator
-        
-        # Set invalid pixels to nodata
-        mndwi = mndwi.where(valid_mask & (denominator != 0), np.nan)
-        
-        # Clamp to valid range
-        mndwi = mndwi.clip(-1.0, 1.0)
-        
-        # Add attributes
-        mndwi.name = "mndwi"
-        mndwi.attrs = {
-            'long_name': 'Modified Normalized Difference Water Index',
-            'units': 'dimensionless',
-            'range': '[-1, 1]'
-        }
-        
-        return mndwi
 
 
 # Alias for backward compatibility

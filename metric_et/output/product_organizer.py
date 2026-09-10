@@ -70,9 +70,27 @@ METRIC_PRODUCT_PATTERNS = {
     'FVC': r'^FVC_[A-Z0-9_]+_\d{4}-\d{2}-\d{2}',
     'LST': r'^LST_[A-Z0-9_]+_\d{4}-\d{2}-\d{2}',
     'Albedo': r'^Albedo_[A-Z0-9_]+_\d{4}-\d{2}-\d{2}',
+    'Emissivity': r'^Emissivity_[A-Z0-9_]+_\d{4}-\d{2}-\d{2}',
     'RGB': r'^RGB_[A-Z0-9_]+_\d{4}-\d{2}-\d{2}',
     'AirTemp': r'^AirTemp_[A-Z0-9_]+_\d{4}-\d{2}-\d{2}',
     'NDWI': r'^NDWI_[A-Z0-9_]+_\d{4}-\d{2}-\d{2}',
+    'MSI': r'^MSI_[A-Z0-9_]+_\d{4}-\d{2}-\d{2}',
+    'NDMI': r'^NDMI_[A-Z0-9_]+_\d{4}-\d{2}-\d{2}',
+    'MNDWI': r'^MNDWI_[A-Z0-9_]+_\d{4}-\d{2}-\d{2}',
+    'NMDI': r'^NMDI_[A-Z0-9_]+_\d{4}-\d{2}-\d{2}',
+    'NIRv': r'^NIRv_[A-Z0-9_]+_\d{4}-\d{2}-\d{2}',
+    'GCI': r'^GCI_[A-Z0-9_]+_\d{4}-\d{2}-\d{2}',
+    'NDSI': r'^NDSI_[A-Z0-9_]+_\d{4}-\d{2}-\d{2}',
+    'SI_T': r'^SI_T_[A-Z0-9_]+_\d{4}-\d{2}-\d{2}',
+    'Rns': r'^Rns_[A-Z0-9_]+_\d{4}-\d{2}-\d{2}',
+    'Rnl': r'^Rnl_[A-Z0-9_]+_\d{4}-\d{2}-\d{2}',
+    'RsDown': r'^RsDown_[A-Z0-9_]+_\d{4}-\d{2}-\d{2}',
+    'RlDown': r'^RlDown_[A-Z0-9_]+_\d{4}-\d{2}-\d{2}',
+    'RlUp': r'^RlUp_[A-Z0-9_]+_\d{4}-\d{2}-\d{2}',
+    'VSWI': r'^VSWI_[A-Z0-9_]+_\d{4}-\d{2}-\d{2}',
+    'TCI': r'^TCI_[A-Z0-9_]+_\d{4}-\d{2}-\d{2}',
+    'VCI': r'^VCI_[A-Z0-9_]+_\d{4}-\d{2}-\d{2}',
+    'VHI': r'^VHI_[A-Z0-9_]+_\d{4}-\d{2}-\d{2}',
 }
 
 
@@ -95,22 +113,27 @@ class ProductOrganizer:
         output_dir: str,
         aoi_name: str = "AOI",
         create_metadata: bool = True,
-        metadata_in_product_folder: bool = True
+        metadata_in_product_folder: bool = True,
+        allowed_products: Optional[List[str]] = None
     ):
         """
         Initialize ProductOrganizer.
-        
+
         Args:
             output_dir: Base output directory containing products
             aoi_name: Area of Interest name for file naming
             create_metadata: Whether to create metadata JSON files
             metadata_in_product_folder: If True, save metadata in each product's folder.
                                                 If False, save in a central metadata folder.
+            allowed_products: If provided, only organize products whose band-name
+                              appears in this list. Prevents empty folders for
+                              unselected product categories.
         """
         self.output_dir = Path(output_dir)
         self.aoi_name = aoi_name
         self.create_metadata = create_metadata
         self.metadata_in_product_folder = metadata_in_product_folder
+        self.allowed_products = allowed_products
         self.products_dir = self.output_dir / "products"
         self.metadata_dir = self.products_dir / "metadata" if not metadata_in_product_folder else None
     
@@ -161,53 +184,57 @@ class ProductOrganizer:
         """Create the products directory structure."""
         # Create main products directory
         self.products_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # Create metadata directory (only if not using per-product folders)
         if self.create_metadata and not self.metadata_in_product_folder:
             self.metadata_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Create subdirectories for each product type
-        for product_type in self.PRODUCT_PATTERNS.keys():
-            product_dir = self.products_dir / product_type
-            product_dir.mkdir(parents=True, exist_ok=True)
-        
-        logger.info(f"Created directory structure in {self.products_dir}")
-        logger.info(f"Product folders created: {list(self.PRODUCT_PATTERNS.keys())}")
+
+        # Per-product directories are created lazily in _organize_product_type()
+        # only when matching files are actually found, avoiding empty dirs.
     
     def _scan_products(self) -> Dict[str, List[Path]]:
         """
         Scan output directory for product files.
-        
+
         Returns:
             Dictionary mapping product types to lists of file paths
         """
         products = {}
-        
+
         # Debug: Count all tif files first
         all_tif_files = list(self.output_dir.rglob("*.tif"))
         logger.debug(f"Total .tif files found: {len(all_tif_files)}")
-        
+
+        # Build allowed-set when a filter is provided
+        allowed_set: Optional[set] = None
+        if self.allowed_products:
+            allowed_set = {p.lower() for p in self.allowed_products}
+            logger.info(f"Product filter active: {sorted(allowed_set)}")
+
         # Scan all .tif files in output directory and subdirectories
         for tif_file in self.output_dir.rglob("*.tif"):
             # Skip files already in products directory
             if "products" in tif_file.parts:
                 continue
-            
+
             # Skip PNG and JSON files
             if tif_file.suffix.lower() != '.tif':
                 continue
-            
+
             # Identify product type
             product_type = self._identify_product_type(tif_file.name)
-            
+
             if product_type:
+                if allowed_set is not None and product_type.lower() not in allowed_set:
+                    logger.debug(f"Filtered out {product_type}: {tif_file.name}")
+                    continue
                 if product_type not in products:
                     products[product_type] = []
                 products[product_type].append(tif_file)
                 logger.debug(f"Found {product_type}: {tif_file.name}")
             else:
                 logger.debug(f"Unrecognized product file: {tif_file.name}")
-        
+
         # Summary log
         if products:
             logger.info(f"Scan complete: Found products in {len(products)} categories")
@@ -215,7 +242,7 @@ class ProductOrganizer:
                 logger.info(f"  {pt}: {len(files)} files")
         else:
             logger.warning("No recognizable products found during scan")
-        
+
         return products
     
     def _identify_product_type(self, filename: str) -> Optional[str]:
@@ -417,17 +444,21 @@ def organize_products(
     output_dir: str,
     aoi_name: str = "AOI",
     create_metadata: bool = True,
-    metadata_in_product_folder: bool = True
+    metadata_in_product_folder: bool = True,
+    allowed_products: Optional[List[str]] = None
 ) -> Dict[str, List[str]]:
     """
     Convenience function to organize products in a single call.
-    
+
     Args:
         output_dir: Base output directory containing products
         aoi_name: Area of Interest name for file naming
         create_metadata: Whether to create metadata JSON files
         metadata_in_product_folder: If True, save metadata in each product's folder
-        
+        allowed_products: If provided, only organize matching products.
+                         Pass band-names (e.g. ['ndvi', 'et_daily']) or product
+                         display names (e.g. ['NDVI', 'ETaDaily']).
+
     Returns:
         Dictionary mapping product types to lists of organized file paths
     """
@@ -435,6 +466,7 @@ def organize_products(
         output_dir=output_dir,
         aoi_name=aoi_name,
         create_metadata=create_metadata,
-        metadata_in_product_folder=metadata_in_product_folder
+        metadata_in_product_folder=metadata_in_product_folder,
+        allowed_products=allowed_products
     )
     return organizer.organize()

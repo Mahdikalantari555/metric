@@ -265,8 +265,8 @@ OUTPUT_VARIABLES = {
 OUTPUT_PRODUCTS = {
     # ET core products
     "et_core": [
-        ("ETa_daily", "ET_daily", "float32"),
-        ("ET_inst", "ET_inst", "float32"),
+        ("ETaDaily", "ET_daily", "float32"),
+        ("ETinst", "ET_inst", "float32"),
         ("ETrF", "ETrF", "float32"),
         ("LE", "LE", "float32"),
     ],
@@ -278,8 +278,8 @@ OUTPUT_PRODUCTS = {
     ],
     # Quality layers
     "quality": [
-        ("ET_quality_class", "ET_quality_class", "uint8"),
-        ("ETa_class", "ETa_class", "uint8"),
+        ("ETqualityClass", "ET_quality_class", "uint8"),
+        ("ETaClassified", "ETa_class", "uint8"),
     ],
     # Surface physical properties
     "surface_props": [
@@ -296,9 +296,9 @@ OUTPUT_PRODUCTS = {
     "radiation": [
         ("Rns", "R_ns", "float32"),
         ("Rnl", "R_nl", "float32"),
-        ("Rs_down", "Rs_down", "float32"),
-        ("Rl_down", "R_l_down", "float32"),
-        ("Rl_up", "R_l_up", "float32"),
+        ("RsDown", "Rs_down", "float32"),
+        ("RlDown", "R_l_down", "float32"),
+        ("RlUp", "R_l_up", "float32"),
     ],
     # Spectral indices (per-scene)
     "spectral_indices": [
@@ -308,6 +308,7 @@ OUTPUT_PRODUCTS = {
         ("NDMI", "ndmi", "float32"),
         ("MSI", "msi", "float32"),
         ("NMDI", "nmdi", "float32"),
+        ("MNDWI", "mndwi", "float32"),
         ("NIRv", "nirv", "float32"),
         ("GCI", "gci", "float32"),
         ("NDSI", "ndsi", "float32"),

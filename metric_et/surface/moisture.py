@@ -88,3 +88,33 @@ class NMDI:
         }
         cube.add("nmdi", nmdi)
         return cube
+
+
+class MNDWI:
+    """Modified Normalized Difference Water Index.
+
+    Formula: MNDWI = (green - swir16) / (green + swir16)
+    Improves water detection, especially in urban areas.
+    """
+
+    def compute(self, cube: DataCube) -> DataCube:
+        if "green" not in cube.bands():
+            raise ValueError("Missing required band 'green' for MNDWI")
+        if "swir16" not in cube.bands():
+            raise ValueError("Missing required band 'swir16' for MNDWI")
+        green = cube.get("green").astype(float)
+        swir = cube.get("swir16").astype(float)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            mndwi = (green - swir) / (green + swir)
+        valid = np.isfinite(green) & np.isfinite(swir) & ((green + swir) != 0)
+        mndwi = mndwi.where(valid, np.nan)
+        mndwi = mndwi.clip(-1.0, 1.0)
+        mndwi.name = "mndwi"
+        mndwi.attrs = {
+            "long_name": "Modified Normalized Difference Water Index",
+            "units": "dimensionless",
+            "range": "[-1, 1]",
+            "formula": "(green - swir16) / (green + swir16)",
+        }
+        cube.add("mndwi", mndwi)
+        return cube

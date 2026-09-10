@@ -1,6 +1,6 @@
 """METRIC ETa processing pipeline."""
 
-from typing import Dict, Optional, Tuple, Union, Any
+from typing import Dict, List, Optional, Tuple, Union, Any
 from datetime import datetime
 import numpy as np
 import xarray as xr
@@ -751,14 +751,16 @@ class METRICPipeline:
             lst_calc.compute(self.data)
             logger.info("LST calculation completed")
 
-            # Calculate stress indices (CWSI_LST, TVDI) if ndvi and lst available
+            # Calculate stress indices (CWSI_LST, TVDI, VSWI) if ndvi and lst available
             try:
-                from ..surface.stress import CWSILSTCalculator, TVDICalculator
+                from ..surface.stress import CWSILSTCalculator, TVDICalculator, VSWI
                 if "ndvi" in self.data.bands() and "lst" in self.data.bands():
                     CWSILSTCalculator().compute(self.data)
                     logger.info("CWSI_LST calculation completed")
                     TVDICalculator().compute(self.data)
                     logger.info("TVDI calculation completed")
+                    VSWI().compute(self.data)
+                    logger.info("VSWI calculation completed")
             except Exception as e:
                 logger.warning(f"Stress indices calculation skipped: {e}")
 
@@ -776,15 +778,20 @@ class METRICPipeline:
     def calculate_spectral_indices(self) -> None:
         """Calculate per-scene spectral indices (Stage 3b).
 
-        Computes NDMI, MSI, NMDI, NIRv, GCI, NDSI, SI_T.
+        Only runs when 'spectral_indices' is in output_categories.
         Missing bands cause a warning log and skip that index only.
         """
         import logging
 
         logger = logging.getLogger(__name__)
 
+        categories = self.config.get('output_categories', [])
+        if 'spectral_indices' not in categories:
+            logger.info("Spectral indices skipped: 'spectral_indices' not in output_categories")
+            return
+
         try:
-            from ..surface.moisture import NDMI, MSI, NMDI
+            from ..surface.moisture import NDMI, MSI, NMDI, MNDWI
             from ..surface.productivity import NIRv, GCI
             from ..surface.salinity import NDSI, SI_T
 
@@ -792,6 +799,7 @@ class METRICPipeline:
                 ("ndmi", NDMI),
                 ("msi", MSI),
                 ("nmdi", NMDI),
+                ("mndwi", MNDWI),
                 ("nirv", NIRv),
                 ("gci", GCI),
                 ("ndsi", NDSI),
@@ -1505,7 +1513,8 @@ class METRICPipeline:
         }
 
     def save_results(self, output_dir: str, output_products: Optional[list] = None,
-                    save_visualization: bool = False) -> None:
+                     save_visualization: bool = False,
+                     output_categories: Optional[list] = None) -> None:
         """Save results to output directory with configurable output products.
 
         Args:
@@ -1546,8 +1555,8 @@ class METRICPipeline:
                         name_lookup[entry[0]] = entry
                 products_to_use = [name_lookup[p] for p in products_to_use if p in name_lookup]
             
-            # Determine output categories from config or fall back to default
-            output_categories = self.config.get('output_categories')
+            # Determine output categories: prefer parameter, then config, then default
+            output_categories = output_categories or self.config.get('output_categories')
             if output_categories is None:
                 output_categories = ['et_core', 'energy_balance', 'surface_props']
 

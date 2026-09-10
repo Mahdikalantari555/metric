@@ -27,7 +27,7 @@ python run_metric_workflow.py \
     [--interpolation-method weighted] \
     [--extrapolation-days 14] \
     [--no-surface] \
-    [--products ETaDaily,ETrF,NDVI] \
+    [--output-categories et_core,spectral_indices] \
     [--save-scenes | --no-save-scenes] \
     [--visualization | --no-visualization]
 ```
@@ -46,9 +46,27 @@ python run_metric_workflow.py \
 | `--interpolation-method` | `weighted` | `linear` or `weighted` |
 | `--extrapolation-days` | `14` | Days to extrapolate beyond the last scene |
 | `--no-surface` | off | Disable surface properties in output |
-| `--products` | all | Comma-separated product list, e.g. `ETaDaily,ETrF,NDVI` |
+| `--output-categories` | `full` | Comma-separated category list (e.g. `et_core,spectral_indices`). Defaults to all categories. Each category gates a group of products — see presets below. |
 | `--save-scenes` / `--no-save-scenes` | **on** | Keep the `scenes/` folder after processing. `--no-save-scenes` deletes it once products are organized |
 | `--visualization` / `--no-visualization` | **off** | Emit `overview_<date>.png` and `et_map_<date>.png`. Off by default |
+
+### Category presets
+
+| Preset | Categories included |
+|--------|-------------------|
+| `full` (default) | `et_core`, `energy_balance`, `quality`, `surface_props`, `radiation`, `spectral_indices`, `stress_indices` |
+| `standard` | `et_core`, `energy_balance`, `surface_props` |
+| `minimal` | `et_core` |
+
+Categories map to groups of products:
+
+- **`et_core`** — ETaDaily, ETinst, ETrF, LE
+- **`energy_balance`** — Rn, G, H
+- **`quality`** — ET_quality_class, ETa_class
+- **`surface_props`** — NDVI, EVI, LAI, FVC, SAVI, Albedo, LST, Emissivity
+- **`radiation`** — Rns, Rnl, Rs_down, Rl_down, Rl_up
+- **`spectral_indices`** — NDVI, SAVI, EVI, NDMI, MSI, NMDI, **MNDWI**, NIRv, GCI, NDSI, SI_T
+- **`stress_indices`** — CWSI_ET, CWSI_LST, TVDI, VSWI, TCI, VCI, VHI
 
 ## Final output layout
 
@@ -126,7 +144,7 @@ python run_metric_workflow.py \
     --visualization
 ```
 
-Only generate a subset of products:
+Only generate ET core and spectral indices:
 
 ```bash
 python run_metric_workflow.py \
@@ -134,5 +152,5 @@ python run_metric_workflow.py \
     --output out/run3 \
     --start-date 2023-06-01 \
     --end-date 2023-08-31 \
-    --products ETaDaily,ETrF,NDVI
+    --output-categories et_core,spectral_indices
 ```
