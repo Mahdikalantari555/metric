@@ -136,13 +136,13 @@ class CloudMasker:
         # Check for actual cloud presence based on confidence and cloud bits
         if threshold == self.CONFIDENCE_HIGH:
             # Only high confidence indicates actual cloud
-            is_cloud = (confidence == self.CONFIDENCE_HIGH) | (dilated_cloud == 1)
+            is_cloud = (confidence == self.CONFIDENCE_HIGH) & (cloud == 1) | (dilated_cloud == 1)
         elif threshold == self.CONFIDENCE_MEDIUM:
-            # Medium or high confidence indicates actual cloud
-            is_cloud = (confidence >= self.CONFIDENCE_MEDIUM) | (dilated_cloud == 1)
+            # Medium or high confidence WITH cloud bit indicates cloud
+            is_cloud = ((confidence >= self.CONFIDENCE_MEDIUM) & (cloud == 1)) | (dilated_cloud == 1)
         elif threshold == self.CONFIDENCE_LOW:
-            # Any confidence indicates potential cloud
-            is_cloud = (confidence >= self.CONFIDENCE_LOW) | (dilated_cloud == 1)
+            # Low confidence with cloud bit OR any dilated cloud
+            is_cloud = ((confidence >= self.CONFIDENCE_LOW) & (cloud == 1)) | (dilated_cloud == 1)
         else:
             # LCD threshold - use cloud bit directly
             is_cloud = cloud == 1
