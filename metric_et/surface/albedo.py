@@ -49,7 +49,7 @@ class AlbedoCalculator:
         use_collection2: bool = True,
         dark_pixel_correction: bool = True,
         min_albedo: float = 0.0,
-        max_albedo: float = 0.5
+        max_albedo: float = 1
     ):
         """
         Initialize AlbedoCalculator.
