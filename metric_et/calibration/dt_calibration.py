@@ -964,7 +964,8 @@ class DTCalibration:
         scene_id: str,
         energy_balance_manager,
         anchor_pixel_selector,
-        validation_config: Optional[Dict[str, Any]] = None
+        validation_config: Optional[Dict[str, Any]] = None,
+        roi_mask=None
     ) -> Tuple[CalibrationResult, Any]:
         """
         Execute the complete METRIC calibration pipeline as specified in the algorithm.
@@ -993,7 +994,7 @@ class DTCalibration:
         try:
             # Step 1: Scene-level pre-validation (HARD REJECT)
             logger.info("Step 1: Scene-level pre-validation")
-            rejected, reason = self._perform_scene_prevalidation(cube)
+            rejected, reason = self._perform_scene_prevalidation(cube, roi_mask=roi_mask)
             if rejected:
                 logger.error(f"Scene rejected in pre-validation: {reason}")
                 return CalibrationResult(
@@ -1136,7 +1137,7 @@ class DTCalibration:
                 hot_pixel_y=0
             ), None
     
-    def _perform_scene_prevalidation(self, cube, qa_pixel=None) -> Tuple[bool, str]:
+    def _perform_scene_prevalidation(self, cube, qa_pixel=None, roi_mask=None) -> Tuple[bool, str]:
         """
         Perform scene-level pre-validation (HARD REJECT) checks.
 
@@ -1167,25 +1168,30 @@ class DTCalibration:
                 return True, "Weather data not available for ET0_inst calculation"
 
             # 1. QA coverage check: count only cloud-masked pixels as loss within ROI
-            # Use qa_pixel to determine ROI size if available (clipped but not cloud-masked)
-            if qa_pixel is not None:
+            if roi_mask is not None:
+                roi_pixels = np.sum(roi_mask)
+                valid_pixels = np.sum(~np.isnan(ndvi.values))
+                if roi_pixels > 0:
+                    valid_pixel_fraction = valid_pixels / roi_pixels
+                else:
+                    return True, "No valid ROI pixels found"
+                logger.info(f"QA coverage (ROI-based): {valid_pixels}/{roi_pixels} = {valid_pixel_fraction:.3f}")
+            elif qa_pixel is not None:
                 roi_pixels = np.sum(~np.isnan(qa_pixel.values))
                 valid_pixels = np.sum(~np.isnan(ndvi.values))
                 if roi_pixels > 0:
                     valid_pixel_fraction = valid_pixels / roi_pixels
                 else:
                     return True, "No valid ROI pixels found"
-            else:
-                # Fallback to old method (includes clipped areas in denominator)
-                valid_pixels = np.sum(~np.isnan(ndvi.values))
-                total_pixels = ndvi.size
-                valid_pixel_fraction = valid_pixels / total_pixels
+                logger.info(f"QA coverage (array-based): {valid_pixels}/{roi_pixels} = {valid_pixel_fraction:.3f}")
 
             # Get QA coverage threshold
             qa_reject_threshold = 0.30  # Reject if QA < 0.30 (severe pixel loss)
 
-            if qa_pixel is not None:
+            if roi_mask is not None:
                 logger.info(f"QA coverage (ROI-based): {valid_pixels}/{roi_pixels} = {valid_pixel_fraction:.3f}")
+            elif qa_pixel is not None:
+                logger.info(f"QA coverage (array-based): {valid_pixels}/{roi_pixels} = {valid_pixel_fraction:.3f}")
             else:
                 logger.info(f"QA coverage (array-based): {valid_pixels}/{total_pixels} = {valid_pixel_fraction:.3f}")
             logger.info(f"Threshold - Reject: <{qa_reject_threshold:.2f}")

@@ -1152,7 +1152,8 @@ class METRICPipeline:
                 scene_id=self._scene_id,
                 energy_balance_manager=self._eb_manager,
                 anchor_pixel_selector=anchor_selector,
-                validation_config=calibration_config
+                validation_config=calibration_config,
+                roi_mask=getattr(self, '_roi_mask', None)
             )
 
             # Store calibration result for later use
