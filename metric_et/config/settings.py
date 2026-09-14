@@ -291,6 +291,7 @@ OUTPUT_PRODUCTS = {
         ("Albedo", "albedo", "float32"),
         ("LST", "lst", "float32"),
         ("Emissivity", "emissivity", "float32"),
+        ("RGB", "rgb", "float32"),
     ],
     # Radiation fluxes
     "radiation": [
