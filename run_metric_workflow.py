@@ -77,7 +77,8 @@ class METRICWorkflow:
         output_categories: Optional[List[str]] = None,
         save_scenes: bool = True,
         visualization: bool = False,
-        min_coverage_ratio: float = 0.95
+        min_coverage_ratio: float = 0.95,
+        scenes_dir: Optional[Path] = None,
     ):
         """
         Initialize METRIC workflow.
@@ -97,6 +98,9 @@ class METRICWorkflow:
                          When False, scenes/ is deleted after product organization.
             visualization: Whether to emit overview_<date>.png and et_map_<date>.png.
                            Default False.
+            scenes_dir: Path to an existing directory of downloaded scenes. When provided,
+                        skips the Planetary Computer fetch and loads scenes from disk.
+                        Must contain subdirectories with complete band .tif files + MTL.json.
         """
         self.roi_path = roi_path
         # Derive AOI name from the ROI file basename (e.g. "test/Extent.geojson" -> "Extent")
@@ -213,9 +217,10 @@ class METRICWorkflow:
         self.save_scenes = save_scenes
         self.visualization = visualization
         self.min_coverage_ratio = min_coverage_ratio
+        self._external_scenes_dir = scenes_dir is not None
 
         # Create output subdirectories
-        self.scenes_dir = self.output_dir / "scenes"
+        self.scenes_dir = scenes_dir if scenes_dir is not None else (self.output_dir / "scenes")
         self.scenes_dir.mkdir(parents=True, exist_ok=True)
         # Transient staging dir replaces the old per-date et_output/result_<date> folders.
         # Products land flat here, then are organized into output/products/.
@@ -267,7 +272,7 @@ class METRICWorkflow:
             logger.info("=" * 60)
             logger.info(f"Scenes directory: {self.scenes_dir}")
             
-            scenes = self._fetch_scenes()
+            scenes = self._load_scenes_from_dir() if self._external_scenes_dir else self._fetch_scenes()
             results['scenes_fetched'] = len(scenes)
             logger.info(f"STEP 1 COMPLETE: Fetched {len(scenes)} scenes")
             
@@ -335,7 +340,7 @@ class METRICWorkflow:
             self._finalize_layout()
 
             # Optionally remove raw scene data
-            if not self.save_scenes:
+            if not self._external_scenes_dir and not self.save_scenes:
                 logger.info("save_scenes=False: removing scenes directory")
                 import shutil
                 shutil.rmtree(self.scenes_dir, ignore_errors=True)
@@ -363,6 +368,61 @@ class METRICWorkflow:
             logger.error(f"Traceback: {traceback.format_exc()}")
             raise
     
+    def _load_scenes_from_dir(self) -> List[Dict]:
+        """Load scene dicts from an existing scenes directory on disk.
+
+        Scans ``self.scenes_dir`` for subdirectories whose names match
+        ``landsat_YYYYMMDD_P{path}_R{row}`` and validates each with the
+        fetcher's completeness check (all band tifs + MTL.json).
+
+        Returns:
+            List of scene dictionaries (same shape as _fetch_scenes)
+        """
+        import re
+        logger.info(f"Loading scenes from existing directory: {self.scenes_dir}")
+
+        if not self.scenes_dir.is_dir():
+            logger.warning(f"Scenes directory does not exist: {self.scenes_dir}")
+            return []
+
+        pattern = re.compile(r'^landsat_(\d{8})_(\d{3})_(\d{3})$')
+        scenes = []
+
+        for subdir in sorted(self.scenes_dir.iterdir()):
+            if not subdir.is_dir():
+                continue
+            m = pattern.match(subdir.name)
+            if not m:
+                logger.debug(f"Skipping non-matching dir: {subdir.name}")
+                continue
+
+            scene_date = f"{m.group(1)[:4]}-{m.group(1)[4:6]}-{m.group(1)[6:]}"
+            path = m.group(2)
+            row = m.group(3)
+
+            fetcher = PlanetaryComputerLandsatFetcher()
+            result = fetcher._find_existing_scene(subdir)
+            if result is None:
+                logger.warning(f"Incomplete scene, skipping: {subdir.name}")
+                continue
+
+            band_files, mtl_path = result
+            scenes.append({
+                "scene_id": subdir.name,
+                "date": scene_date,
+                "cloud_cover": None,
+                "path": int(path),
+                "row": int(row),
+                "directory": str(subdir),
+                "bands_downloaded": len(band_files),
+                "mtl_file": str(mtl_path),
+                "band_files": [str(p) for p in band_files.values()],
+            })
+            logger.info(f"Scene ready: {subdir.name} for {scene_date}")
+
+        logger.info(f"Loaded {len(scenes)} scene(s) from {self.scenes_dir}")
+        return scenes
+
     def _fetch_scenes(self) -> List[Dict]:
         """
         Fetch Landsat scenes from Planetary Computer.
@@ -1199,6 +1259,11 @@ def main():
         help='Emit overview_<date>.png and et_map_<date>.png visualizations '
              '(default: off). Use --visualization to enable.'
     )
+    parser.add_argument(
+        '--scenes-dir', type=str, default=None,
+        help='Path to an existing directory of downloaded scenes (landsat_YYYYMMDD_P{path}_R{row} subdirs). '
+             'When provided, skips the Planetary Computer fetch and loads scenes from disk instead.'
+    )
 
     args = parser.parse_args()
 
@@ -1215,7 +1280,8 @@ def main():
         extrapolation_days=args.extrapolation_days,
         output_categories=[c.strip() for c in args.output_categories.split(',')] if args.output_categories else None,
         save_scenes=args.save_scenes,
-        visualization=args.visualization
+        visualization=args.visualization,
+        scenes_dir=Path(args.scenes_dir) if args.scenes_dir else None,
     )
     
     results = workflow.run()

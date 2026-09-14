@@ -26,10 +26,10 @@ python run_metric_workflow.py \
     [--source-crs EPSG:4326] \
     [--interpolation-method weighted] \
     [--extrapolation-days 14] \
-    [--no-surface] \
     [--output-categories et_core,spectral_indices] \
     [--save-scenes | --no-save-scenes] \
-    [--visualization | --no-visualization]
+    [--visualization | --no-visualization] \
+    [--scenes-dir /path/to/existing/scenes/]
 ```
 
 ### Flags
@@ -49,6 +49,7 @@ python run_metric_workflow.py \
 | `--output-categories` | `full` | Comma-separated category list (e.g. `et_core,spectral_indices`). Defaults to all categories. Each category gates a group of products — see presets below. |
 | `--save-scenes` / `--no-save-scenes` | **on** | Keep the `scenes/` folder after processing. `--no-save-scenes` deletes it once products are organized |
 | `--visualization` / `--no-visualization` | **off** | Emit `overview_<date>.png` and `et_map_<date>.png`. Off by default |
+| `--scenes-dir` | none | Path to an existing directory of downloaded scenes (e.g. from a prior run). Skips the Planetary Computer fetch and loads scene subdirs directly from disk instead |
 
 ### Category presets
 
@@ -154,3 +155,18 @@ python run_metric_workflow.py \
     --end-date 2023-08-31 \
     --output-categories et_core,spectral_indices
 ```
+
+Reuse scenes from a prior run — skips fetching from Planetary Computer:
+
+```bash
+python run_metric_workflow.py \
+    --roi data/roi.geojson \
+    --output out/run4 \
+    --start-date 2023-06-01 \
+    --end-date 2023-08-31 \
+    --scenes-dir /some/path/to/existing_scenes/
+```
+
+The directory must contain scene subdirs named `landsat_YYYYMMDD_P{path}_R{row}`
+each holding all band `.tif` files plus an `MTL.json` (the same layout produced
+by a normal fetch). Incomplete dirs are skipped with a warning.
