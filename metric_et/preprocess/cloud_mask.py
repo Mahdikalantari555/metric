@@ -108,8 +108,8 @@ class CloudMasker:
             coords = None
             dims = None
         
-        # Initialize mask as clear (True)
-        mask = np.ones(qa_values.shape, dtype=bool)
+        # Check for fill (bit 0): fill pixels are never clear
+        fill = (qa_values >> 0) & 1
         
         # Get confidence level from bits 8-9
         confidence = (qa_values >> 8) & 0b11
@@ -132,21 +132,14 @@ class CloudMasker:
         # Determine cloud confidence threshold
         threshold = confidence_override if confidence_override is not None else self.cloud_confidence_threshold
         
-        # Apply cloud detection
-        # Check for actual cloud presence based on confidence and cloud bits
-        if threshold == self.CONFIDENCE_HIGH:
-            # Only high confidence indicates actual cloud
-            is_cloud = (confidence == self.CONFIDENCE_HIGH) & (cloud == 1) | (dilated_cloud == 1)
-        elif threshold == self.CONFIDENCE_MEDIUM:
-            # Medium or high confidence WITH cloud bit indicates cloud
-            is_cloud = ((confidence >= self.CONFIDENCE_MEDIUM) & (cloud == 1)) | (dilated_cloud == 1)
-        elif threshold == self.CONFIDENCE_LOW:
-            # Low confidence with cloud bit OR any dilated cloud
-            is_cloud = ((confidence >= self.CONFIDENCE_LOW) & (cloud == 1)) | (dilated_cloud == 1)
-        else:
-            # LCD threshold - use cloud bit directly
-            is_cloud = cloud == 1
+        # Cloud/shadow bits are authoritative; confidence only refines reporting.
+        is_cloud = (cloud == 1) | (dilated_cloud == 1)
         
+        # Initialize mask as clear (True)
+        mask = np.ones(qa_values.shape, dtype=bool)
+        # Fill (no-data) pixels are never clear
+        mask = mask & (fill == 0)
+
         # Mark clouds and shadows as not clear
         mask = mask & ~is_cloud
         mask = mask & (cloud_shadow == 0)
@@ -155,10 +148,14 @@ class CloudMasker:
         if not self.include_snow:
             mask = mask & (snow == 0)
         
-        # Handle water
+        # Handle water: water is only clear where it is not already
+        # cloud/shadow/snow/dilated-cloud. Never let water resurrect a bad pixel.
         if self.include_water:
-            # Water is clear
-            mask = mask | (water == 1)
+            bad = is_cloud | (cloud_shadow == 1) | (dilated_cloud == 1) | (cloud == 1)
+            if not self.include_snow:
+                bad = bad | (snow == 1)
+            water_clear = (water == 1) & ~bad
+            mask = mask | water_clear
         else:
             # Water is masked
             mask = mask & (water == 0)
@@ -249,40 +246,37 @@ class CloudMasker:
     
     def _dilate_mask(self, mask: np.ndarray, iterations: int) -> np.ndarray:
         """
-        Dilate the cloud mask using binary dilation.
-        
-        Args:
-            mask: Input boolean mask
-            iterations: Number of dilation iterations
-            
-        Returns:
-            Dilated mask
+        Dilate the cloud mask (False/clear regions become False where nearby
+        cloud pixels exist). ``mask`` is True=clear; we dilate the cloud
+        region (~mask) and invert.
         """
+        if iterations <= 0:
+            return mask
+
+        cloud = ~np.asarray(mask, dtype=bool)
+        dilated = cloud.copy()
+
+        # Prefer scipy when available.
         try:
             from scipy.ndimage import binary_dilation
+
+            structure = np.ones((3, 3), dtype=bool)
+            dilated = binary_dilation(cloud, structure=structure, iterations=iterations)
         except ImportError:
-            # Fallback: manual binary dilation using convolution
-            def manual_dilation(arr, iterations):
-                """Manual binary dilation using max filter."""
-                kernel_size = 3
-                padded = np.pad(arr, ((1, 1), (1, 1)), mode='constant', constant_values=False)
-                
-                for _ in range(iterations):
-                    result = np.zeros_like(padded)
-                    for i in range(1, padded.shape[0] - 1):
-                        for j in range(1, padded.shape[1] - 1):
-                            # Check 3x3 neighborhood
-                            if np.any(padded[i-1:i+2, j-1:j+2]):
-                                result[i, j] = True
-                    padded = result
-                
-                return padded[1:-1, 1:-1]
-            
-            return manual_dilation(mask, iterations)
-        
-        structure = np.ones((iterations * 2 + 1, iterations * 2 + 1))
-        dilated = binary_dilation(~mask, structure=structure, iterations=iterations)
-        
+            # Fast 8-neighbourhood fallback.
+            for _ in range(iterations):
+                nxt = dilated.copy()
+                # orthogonal + diagonal shifts
+                nxt[1:, :] |= dilated[:-1, :]
+                nxt[:-1, :] |= dilated[1:, :]
+                nxt[:, 1:] |= dilated[:, :-1]
+                nxt[:, :-1] |= dilated[:, 1:]
+                nxt[1:, 1:] |= dilated[:-1, :-1]
+                nxt[:-1, :-1] |= dilated[1:, 1:]
+                nxt[1:, :-1] |= dilated[:-1, 1:]
+                nxt[:-1, 1:] |= dilated[1:, :-1]
+                dilated = nxt
+
         return ~dilated
     
     def detect_cloud_shadow(

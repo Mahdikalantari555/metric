@@ -38,7 +38,9 @@ REFLECTANCE_BANDS = [
 # Thermal infrared band
 THERMAL_BAND = "lwir11"
 
-# Quality assurance bands
+# Quality assurance bands.
+#   qa       -> QA_RADSAT (radiometric saturation), NOT a cloud mask
+#   qa_pixel -> QA_PIXEL (bit mask used for cloud/shadow/snow detection)
 QA_BANDS = ["qa", "qa_pixel"]
 
 # All satellite bands

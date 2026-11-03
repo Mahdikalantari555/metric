@@ -56,6 +56,8 @@ class LandsatReader:
     """
     
     # Default band name to filename mapping for Landsat 8/9 (OLI)
+    # Note: 'qa' is QA_RADSAT (radiometric saturation), NOT a cloud mask.
+    #       'qa_pixel' is QA_PIXEL and is the only valid input to CloudMasker.
     DEFAULT_BAND_MAPPING = {
         'blue': 'blue.tif',
         'green': 'green.tif',
