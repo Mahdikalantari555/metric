@@ -36,6 +36,7 @@ class CloudMasker:
     
     # QA pixel bit flags for Landsat 8/9 Collection 2
     # See: https://www.usgs.gov/landsat-missions/landsat-collection-2-level-2-quality-assessment-band
+    QA_CIRRUS_BIT = 2
     QA_DILATED_CLOUD_BIT = 1
     QA_CLOUD_BIT = 3
     QA_CLOUD_SHADOW_BIT = 4
@@ -111,9 +112,15 @@ class CloudMasker:
         # Check for fill (bit 0): fill pixels are never clear
         fill = (qa_values >> 0) & 1
         
-        # Get confidence level from bits 8-9
-        confidence = (qa_values >> 8) & 0b11
+        # Cloud confidence (bits 8-9) is deliberately NOT used to gate the QA
+        # cloud bits. USGS bit encoding is 00=not determined, 01=low, 10=medium,
+        # 11=high; the CONFIDENCE_* constants are API labels, not bit values,
+        # so gating on `confidence == CONFIDENCE_HIGH` (2) dropped every
+        # high-confidence cloud (bit value 3).
         
+        # Check for cirrus (bit 2) — high clouds invisible to the cloud bit.
+        cirrus = (qa_values >> self.QA_CIRRUS_BIT) & 1
+
         # Check for dilated cloud (bit 1)
         dilated_cloud = (qa_values >> self.QA_DILATED_CLOUD_BIT) & 1
         
@@ -129,11 +136,12 @@ class CloudMasker:
         # Check for water (bit 7)
         water = (qa_values >> self.WATER_BIT) & 1
         
-        # Determine cloud confidence threshold
-        threshold = confidence_override if confidence_override is not None else self.cloud_confidence_threshold
+        # `confidence_override` is retained for API compatibility; the QA
+        # cloud/shadow bits are authoritative, so no confidence gating applies.
+        _ = confidence_override
         
         # Cloud/shadow bits are authoritative; confidence only refines reporting.
-        is_cloud = (cloud == 1) | (dilated_cloud == 1)
+        is_cloud = (cloud == 1) | (dilated_cloud == 1) | (cirrus == 1)
         
         # Initialize mask as clear (True)
         mask = np.ones(qa_values.shape, dtype=bool)
